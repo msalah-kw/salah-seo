@@ -118,8 +118,11 @@ class Salah_SEO_Plugin {
      */
     private function load_includes() {
         $required_files = array(
+            'includes/class-salah-seo-helpers.php',
+            'includes/class-salah-seo-scheduler.php',
             'includes/class-salah-seo-core.php',
-            'includes/class-salah-seo-helpers.php'
+            'includes/class-salah-seo-rest.php',
+            'includes/class-salah-seo-cli.php'
         );
         
         if (is_admin()) {
@@ -158,8 +161,20 @@ class Salah_SEO_Plugin {
      * Initialize core functionality
      */
     private function init_core() {
+        if (class_exists('Salah_SEO_Scheduler')) {
+            Salah_SEO_Scheduler::init();
+        }
+
+        if (class_exists('Salah_SEO_REST')) {
+            Salah_SEO_REST::init();
+        }
+
+        if (class_exists('Salah_SEO_CLI')) {
+            Salah_SEO_CLI::init();
+        }
+
         if (class_exists('Salah_SEO_Core')) {
-            new Salah_SEO_Core();
+            Salah_SEO_Core::instance();
         }
     }
     
@@ -176,18 +191,48 @@ class Salah_SEO_Plugin {
             'enable_image_optimization' => true,
             'enable_internal_linking' => true,
             'enable_canonical_fix' => true,
+            'enable_redirect_manager' => true,
+            'enable_schema_markup' => true,
+            'enable_social_meta' => true,
+            'background_processing' => true,
+            'batch_size' => 5,
+            'batch_delay' => 5,
+            'task_timeout' => 120,
+            'queries_per_minute' => 120,
+            'dry_run_enabled' => true,
+            'fallback_og_image' => '',
             'default_meta_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_short_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_full_description' => 'أفضل منتجات الفيب وأكياس النيكوتين في الكويت. نوفر لك تشكيلة واسعة من أجهزة الفيب، بودات، نكهات، وأظرف نيكوتين أصلية 100%. تمتع بتجربة تدخين الكتروني آمنة، سهلة الاستخدام، وبأسعار تنافسية مع خدمة توصيل سريعة ومجانية داخل الكويت. منتجاتنا تناسب المبتدئين والمحترفين، وتشمل أشهر العلامات التجارية في مجال الفيب. اختر الآن البديل العصري للتدخين التقليدي واستمتع بجودة عالية وتجربة مختلفة.',
-            'internal_links' => array(
-                'أكياس النيكوتين' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/',
-                'نيكوتين' => 'https://nicotinekw.com/natural-nicotine-in-the-body/',
-                'فيب' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/',
-                'نكهات' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/',
-                'الكويت' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/'
+            'internal_link_rules' => array(
+                array(
+                    'keyword' => 'أكياس النيكوتين',
+                    'url' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'نيكوتين',
+                    'url' => 'https://nicotinekw.com/natural-nicotine-in-the-body/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'فيب',
+                    'url' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'نكهات',
+                    'url' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'الكويت',
+                    'url' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/',
+                    'repeats' => 1
+                )
             )
         );
-        
+
         add_option('salah_seo_settings', $default_options);
         
         // Create a transient to show activation notice
