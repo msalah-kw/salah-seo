@@ -179,15 +179,35 @@ class Salah_SEO_Plugin {
             'default_meta_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_short_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_full_description' => 'أفضل منتجات الفيب وأكياس النيكوتين في الكويت. نوفر لك تشكيلة واسعة من أجهزة الفيب، بودات، نكهات، وأظرف نيكوتين أصلية 100%. تمتع بتجربة تدخين الكتروني آمنة، سهلة الاستخدام، وبأسعار تنافسية مع خدمة توصيل سريعة ومجانية داخل الكويت. منتجاتنا تناسب المبتدئين والمحترفين، وتشمل أشهر العلامات التجارية في مجال الفيب. اختر الآن البديل العصري للتدخين التقليدي واستمتع بجودة عالية وتجربة مختلفة.',
-            'internal_links' => array(
-                'أكياس النيكوتين' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/',
-                'نيكوتين' => 'https://nicotinekw.com/natural-nicotine-in-the-body/',
-                'فيب' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/',
-                'نكهات' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/',
-                'الكويت' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/'
+            'internal_link_rules' => array(
+                array(
+                    'keyword' => 'أكياس النيكوتين',
+                    'url' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'نيكوتين',
+                    'url' => 'https://nicotinekw.com/natural-nicotine-in-the-body/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'فيب',
+                    'url' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'نكهات',
+                    'url' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/',
+                    'repeats' => 1
+                ),
+                array(
+                    'keyword' => 'الكويت',
+                    'url' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/',
+                    'repeats' => 1
+                )
             )
         );
-        
+
         add_option('salah_seo_settings', $default_options);
         
         // Create a transient to show activation notice

@@ -111,12 +111,12 @@ class Salah_SEO_Core {
         if ($this->populate_full_description($post_id)) {
             $optimizations_applied = true;
             $applied_optimizations[] = 'الوصف الكامل (Full Description)';
-            
-            // Apply internal linking after description is set
-            if ($this->is_feature_enabled('enable_internal_linking')) {
-                if ($this->apply_internal_linking($post_id)) {
-                    $applied_optimizations[] = 'الربط الداخلي (Internal Linking)';
-                }
+        }
+
+        if ($this->is_feature_enabled('enable_internal_linking')) {
+            if ($this->apply_internal_linking($post_id)) {
+                $optimizations_applied = true;
+                $applied_optimizations[] = 'الربط الداخلي (Internal Linking)';
             }
         }
         
@@ -307,27 +307,19 @@ class Salah_SEO_Core {
             return false;
         }
         
-        $internal_links = $this->get_setting('internal_links');
-        if (empty($internal_links) || !is_array($internal_links)) {
+        $internal_link_rules = $this->get_setting('internal_link_rules');
+        if (empty($internal_link_rules)) {
             return false;
         }
-        
-        $updated_content = $content;
-        
-        foreach ($internal_links as $keyword => $url) {
-            if (empty($keyword) || empty($url)) {
-                continue;
-            }
-            
-            // Create the link HTML
-            $link_html = '<a href="' . esc_url($url) . '">' . esc_html($keyword) . '</a>';
-            
-            // Replace first occurrence only using preg_replace with limit
-            $pattern = '/\b' . preg_quote($keyword, '/') . '\b/u';
-            $updated_content = preg_replace($pattern, $link_html, $updated_content, 1);
+
+        $normalized_rules = Salah_SEO_Helpers::format_internal_link_rules($internal_link_rules);
+
+        if (empty($normalized_rules)) {
+            return false;
         }
-        
-        // Update content if it was modified
+
+        $updated_content = Salah_SEO_Helpers::apply_internal_links_to_content($content, $normalized_rules);
+
         if ($updated_content !== $content) {
             wp_update_post(array(
                 'ID' => $post_id,
@@ -364,6 +356,12 @@ class Salah_SEO_Core {
      * Get a setting value
      */
     private function get_setting($key) {
+        if ('internal_link_rules' === $key) {
+            $rules = isset($this->settings[$key]) ? $this->settings[$key] : array();
+
+            return Salah_SEO_Helpers::format_internal_link_rules($rules);
+        }
+
         return isset($this->settings[$key]) ? $this->settings[$key] : '';
     }
 }

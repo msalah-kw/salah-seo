@@ -25,14 +25,16 @@ class Salah_SEO_Admin {
         add_action('admin_init', array($this, 'register_settings'));
         add_action('admin_notices', array($this, 'show_notices'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
-        
+
         // Add metabox for individual product optimization
         add_action('add_meta_boxes', array($this, 'add_product_metabox'));
-        
+
         // AJAX handlers
         add_action('wp_ajax_salah_seo_optimize_product', array($this, 'ajax_optimize_product'));
         add_action('wp_ajax_salah_seo_bulk_start', array($this, 'ajax_bulk_start'));
         add_action('wp_ajax_salah_seo_bulk_process', array($this, 'ajax_bulk_process'));
+        add_action('wp_ajax_salah_seo_links_prepare', array($this, 'ajax_links_prepare'));
+        add_action('wp_ajax_salah_seo_links_process', array($this, 'ajax_links_process'));
     }
     
     /**
@@ -57,146 +59,6 @@ class Salah_SEO_Admin {
             $this->option_name,
             array($this, 'sanitize_settings')
         );
-        
-        // General Settings Section
-        add_settings_section(
-            'salah_seo_general_section',
-            __('General Settings', 'salah-seo'),
-            array($this, 'general_section_callback'),
-            'salah-seo-settings'
-        );
-        
-        // Feature Toggle Fields
-        add_settings_field(
-            'enable_focus_keyword',
-            __('Enable Focus Keyword Auto-fill', 'salah-seo'),
-            array($this, 'checkbox_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_general_section',
-            array('field' => 'enable_focus_keyword')
-        );
-        
-        add_settings_field(
-            'enable_meta_description',
-            __('Enable Meta Description Auto-fill', 'salah-seo'),
-            array($this, 'checkbox_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_general_section',
-            array('field' => 'enable_meta_description')
-        );
-        
-        add_settings_field(
-            'enable_short_description',
-            __('Enable Short Description Auto-fill', 'salah-seo'),
-            array($this, 'checkbox_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_general_section',
-            array('field' => 'enable_short_description')
-        );
-        
-        add_settings_field(
-            'enable_product_tags',
-            __('Enable Product Tags Auto-fill', 'salah-seo'),
-            array($this, 'checkbox_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_general_section',
-            array('field' => 'enable_product_tags')
-        );
-        
-        add_settings_field(
-            'enable_image_optimization',
-            __('Enable Image Optimization', 'salah-seo'),
-            array($this, 'checkbox_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_general_section',
-            array('field' => 'enable_image_optimization')
-        );
-        
-        add_settings_field(
-            'enable_internal_linking',
-            __('Enable Internal Linking', 'salah-seo'),
-            array($this, 'checkbox_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_general_section',
-            array('field' => 'enable_internal_linking')
-        );
-        
-        add_settings_field(
-            'enable_canonical_fix',
-            __('Enable Canonical URL Fix', 'salah-seo'),
-            array($this, 'checkbox_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_general_section',
-            array('field' => 'enable_canonical_fix')
-        );
-        
-        // Default Texts Section
-        add_settings_section(
-            'salah_seo_texts_section',
-            __('Default Texts', 'salah-seo'),
-            array($this, 'texts_section_callback'),
-            'salah-seo-settings'
-        );
-        
-        add_settings_field(
-            'default_meta_description',
-            __('Default Meta Description', 'salah-seo'),
-            array($this, 'textarea_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_texts_section',
-            array('field' => 'default_meta_description')
-        );
-        
-        add_settings_field(
-            'default_short_description',
-            __('Default Short Description', 'salah-seo'),
-            array($this, 'textarea_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_texts_section',
-            array('field' => 'default_short_description')
-        );
-        
-        add_settings_field(
-            'default_full_description',
-            __('Default Full Description', 'salah-seo'),
-            array($this, 'textarea_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_texts_section',
-            array('field' => 'default_full_description')
-        );
-        
-        // Internal Links Section
-        add_settings_section(
-            'salah_seo_links_section',
-            __('Internal Links Management', 'salah-seo'),
-            array($this, 'links_section_callback'),
-            'salah-seo-settings'
-        );
-        
-        add_settings_field(
-            'internal_links',
-            __('Keyword-URL Mappings', 'salah-seo'),
-            array($this, 'internal_links_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_links_section',
-            array('field' => 'internal_links')
-        );
-        
-        // Bulk Operations Section
-        add_settings_section(
-            'salah_seo_bulk_section',
-            __('أدوات التنفيذ الجماعي', 'salah-seo'),
-            array($this, 'bulk_section_callback'),
-            'salah-seo-settings'
-        );
-        
-        add_settings_field(
-            'bulk_operations',
-            __('تحسين جماعي للمنتجات', 'salah-seo'),
-            array($this, 'bulk_operations_field_callback'),
-            'salah-seo-settings',
-            'salah_seo_bulk_section'
-        );
     }
     
     /**
@@ -204,39 +66,46 @@ class Salah_SEO_Admin {
      */
     public function sanitize_settings($input) {
         $sanitized = array();
-        
-        // Sanitize checkboxes
+
         $checkboxes = array(
             'enable_focus_keyword',
-            'enable_meta_description', 
+            'enable_meta_description',
             'enable_short_description',
             'enable_product_tags',
             'enable_image_optimization',
             'enable_internal_linking',
             'enable_canonical_fix'
         );
-        
+
         foreach ($checkboxes as $checkbox) {
-            $sanitized[$checkbox] = isset($input[$checkbox]) ? true : false;
+            $sanitized[$checkbox] = !empty($input[$checkbox]);
         }
-        
-        // Sanitize text fields
-        $sanitized['default_meta_description'] = sanitize_textarea_field($input['default_meta_description']);
-        $sanitized['default_short_description'] = sanitize_textarea_field($input['default_short_description']);
-        $sanitized['default_full_description'] = sanitize_textarea_field($input['default_full_description']);
-        
-        // Sanitize internal links
-        $sanitized['internal_links'] = array();
-        if (isset($input['internal_links']) && is_array($input['internal_links'])) {
-            foreach ($input['internal_links'] as $keyword => $url) {
-                $clean_keyword = sanitize_text_field($keyword);
-                $clean_url = esc_url_raw($url);
-                if (!empty($clean_keyword) && !empty($clean_url)) {
-                    $sanitized['internal_links'][$clean_keyword] = $clean_url;
+
+        $sanitized['default_meta_description'] = isset($input['default_meta_description']) ? sanitize_textarea_field($input['default_meta_description']) : '';
+        $sanitized['default_short_description'] = isset($input['default_short_description']) ? sanitize_textarea_field($input['default_short_description']) : '';
+        $sanitized['default_full_description'] = isset($input['default_full_description']) ? sanitize_textarea_field($input['default_full_description']) : '';
+
+        $sanitized['internal_link_rules'] = array();
+        if (!empty($input['internal_link_rules']) && is_array($input['internal_link_rules'])) {
+            foreach ($input['internal_link_rules'] as $rule) {
+                if (!is_array($rule)) {
+                    continue;
+                }
+
+                $keyword = isset($rule['keyword']) ? sanitize_text_field($rule['keyword']) : '';
+                $url = isset($rule['url']) ? Salah_SEO_Helpers::validate_url($rule['url']) : false;
+                $repeats = isset($rule['repeats']) ? max(1, intval($rule['repeats'])) : 1;
+
+                if ($keyword && $url) {
+                    $sanitized['internal_link_rules'][] = array(
+                        'keyword' => $keyword,
+                        'url' => $url,
+                        'repeats' => $repeats,
+                    );
                 }
             }
         }
-        
+
         return $sanitized;
     }
     
@@ -244,7 +113,11 @@ class Salah_SEO_Admin {
      * Settings page callback
      */
     public function settings_page() {
-        include SALAH_SEO_PLUGIN_DIR . 'admin/views/settings-page.php';
+        $settings = Salah_SEO_Helpers::get_plugin_settings();
+        $link_rules = isset($settings['internal_link_rules']) ? $settings['internal_link_rules'] : array();
+        $compatibility = Salah_SEO_Helpers::check_plugin_compatibility();
+
+        include SALAH_SEO_PLUGIN_DIR . 'admin/views/dashboard.php';
     }
     
     /**
@@ -694,7 +567,141 @@ class Salah_SEO_Admin {
             wp_send_json_error(array('message' => __('خطأ في تحميل نواة الإضافة', 'salah-seo')));
         }
     }
-    
+
+    /**
+     * Prepare queue for internal link operations
+     */
+    public function ajax_links_prepare() {
+        check_ajax_referer('salah_seo_links_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('صلاحيات غير كافية لتنفيذ العملية', 'salah-seo')));
+        }
+
+        $action = isset($_POST['link_action']) ? sanitize_text_field($_POST['link_action']) : '';
+        if (!in_array($action, array('apply', 'remove'), true)) {
+            wp_send_json_error(array('message' => __('عملية غير معروفة', 'salah-seo')));
+        }
+
+        if ('apply' === $action) {
+            $settings = Salah_SEO_Helpers::get_plugin_settings();
+            if (empty($settings['internal_link_rules'])) {
+                wp_send_json_error(array('message' => __('لا توجد قواعد للربط الداخلي. يرجى إضافة القواعد أولاً.', 'salah-seo')));
+            }
+        }
+
+        $post_types = array('post', 'product');
+        $query = new WP_Query(array(
+            'post_type' => $post_types,
+            'post_status' => 'publish',
+            'posts_per_page' => -1,
+            'fields' => 'ids',
+        ));
+
+        $post_ids = $query->posts;
+
+        $queue = array(
+            'action' => $action,
+            'items' => $post_ids,
+            'total' => count($post_ids),
+        );
+
+        set_transient('salah_seo_links_queue', $queue, HOUR_IN_SECONDS);
+
+        wp_send_json_success(array(
+            'total_items' => $queue['total'],
+        ));
+    }
+
+    /**
+     * Process queued internal link operations in batches
+     */
+    public function ajax_links_process() {
+        check_ajax_referer('salah_seo_links_nonce', 'nonce');
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('صلاحيات غير كافية لتنفيذ العملية', 'salah-seo')));
+        }
+
+        $queue = get_transient('salah_seo_links_queue');
+
+        if (false === $queue || empty($queue['items'])) {
+            wp_send_json_error(array('message' => __('لا توجد عناصر جاهزة للمعالجة. يرجى البدء من جديد.', 'salah-seo')));
+        }
+
+        $action = isset($queue['action']) ? $queue['action'] : 'apply';
+        $batch_size = apply_filters('salah_seo_links_batch_size', 5);
+        $items = isset($queue['items']) ? $queue['items'] : array();
+        $batch_ids = array_splice($items, 0, $batch_size);
+
+        if (empty($batch_ids)) {
+            delete_transient('salah_seo_links_queue');
+            wp_send_json_success(array(
+                'done' => true,
+                'processed_count' => 0,
+                'batch_total' => 0,
+                'remaining' => 0,
+                'message' => __('لا توجد عناصر متبقية.', 'salah-seo'),
+                'total' => isset($queue['total']) ? (int) $queue['total'] : 0,
+            ));
+        }
+
+        $messages = array();
+        $processed_count = 0;
+        $batch_total = count($batch_ids);
+        $settings = Salah_SEO_Helpers::get_plugin_settings();
+        $rules = isset($settings['internal_link_rules']) ? $settings['internal_link_rules'] : array();
+
+        foreach ($batch_ids as $post_id) {
+            $post = get_post($post_id);
+            if (!$post || empty($post->post_content)) {
+                continue;
+            }
+
+            $original_content = $post->post_content;
+            $updated_content = $original_content;
+
+            if ('apply' === $action) {
+                $updated_content = Salah_SEO_Helpers::apply_internal_links_to_content($original_content, $rules);
+            } else {
+                $updated_content = Salah_SEO_Helpers::remove_internal_links_from_content($original_content);
+            }
+
+            if ($updated_content !== $original_content) {
+                wp_update_post(array(
+                    'ID' => $post_id,
+                    'post_content' => $updated_content,
+                ));
+                $processed_count++;
+                $messages[] = sprintf(
+                    '%s: %s',
+                    esc_html(get_the_title($post_id)),
+                    'apply' === $action ? __('تمت إضافة الروابط', 'salah-seo') : __('تمت إزالة الروابط', 'salah-seo')
+                );
+            }
+        }
+
+        $queue['items'] = $items;
+
+        if (empty($queue['items'])) {
+            delete_transient('salah_seo_links_queue');
+        } else {
+            set_transient('salah_seo_links_queue', $queue, HOUR_IN_SECONDS);
+        }
+
+        $remaining = isset($queue['items']) ? count($queue['items']) : 0;
+        $total = isset($queue['total']) ? (int) $queue['total'] : $processed_count;
+
+        wp_send_json_success(array(
+            'done' => $remaining === 0,
+            'processed_count' => $processed_count,
+            'batch_total' => $batch_total,
+            'remaining' => $remaining,
+            'total' => $total,
+            'message' => implode("\n", $messages),
+        ));
+    }
+
     /**
      * Enqueue admin scripts and styles
      */
@@ -703,30 +710,69 @@ class Salah_SEO_Admin {
         if ('settings_page_salah-seo-settings' === $hook) {
             wp_enqueue_script('jquery');
             wp_enqueue_script(
+                'salah-seo-tailwind',
+                'https://cdn.tailwindcss.com',
+                array(),
+                SALAH_SEO_VERSION,
+                true
+            );
+            wp_enqueue_script(
                 'salah-seo-admin',
                 SALAH_SEO_PLUGIN_URL . 'admin/js/admin.js',
                 array('jquery'),
                 SALAH_SEO_VERSION,
                 true
             );
-            
+
             wp_enqueue_style(
                 'salah-seo-admin',
                 SALAH_SEO_PLUGIN_URL . 'admin/css/admin.css',
                 array(),
                 SALAH_SEO_VERSION
             );
-            
-            // Localize script for bulk operations
+
+            $settings = Salah_SEO_Helpers::get_plugin_settings();
+
             wp_localize_script('salah-seo-admin', 'salahSeoAjax', array(
                 'ajaxurl' => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('salah_seo_bulk_nonce'),
+                'linksNonce' => wp_create_nonce('salah_seo_links_nonce'),
                 'strings' => array(
                     'starting' => __('بدء العملية...', 'salah-seo'),
                     'processing' => __('جاري المعالجة...', 'salah-seo'),
                     'completed' => __('اكتملت العملية!', 'salah-seo'),
                     'error' => __('حدث خطأ', 'salah-seo')
-                )
+                ),
+                'linksStrings' => array(
+                    'preparing' => __('جاري تجهيز العناصر...', 'salah-seo'),
+                    'applying' => __('يتم تطبيق الروابط الداخلية', 'salah-seo'),
+                    'removing' => __('يتم إزالة الروابط الداخلية', 'salah-seo'),
+                    'completed' => __('اكتملت العملية بنجاح', 'salah-seo'),
+                    'stopped' => __('تم إيقاف العملية', 'salah-seo')
+                ),
+                'linkRules' => $settings['internal_link_rules'],
+                'totalProducts' => wp_count_posts('product')->publish,
+            ));
+
+            wp_localize_script('salah-seo-admin', 'salahSeoLabels', array(
+                'keyword' => __('الكلمة المستهدفة', 'salah-seo'),
+                'url' => __('الرابط الداخلي', 'salah-seo'),
+                'repeats' => __('أقصى عدد للتكرار', 'salah-seo'),
+                'delete' => __('حذف القاعدة', 'salah-seo'),
+                'emptyState' => __('لم يتم إضافة أي قواعد بعد. اضغط على زر "إضافة قاعدة جديدة" للبدء.', 'salah-seo'),
+                'validationError' => __('يرجى التأكد من إدخال كلمة مفتاحية ورابط صحيح لكل قاعدة.', 'salah-seo'),
+                'unsaved' => __('تغييرات غير محفوظة', 'salah-seo'),
+                'unsavedWarning' => __('لديك تغييرات غير محفوظة. هل أنت متأكد أنك تريد المغادرة؟', 'salah-seo'),
+                'bulkStart' => __('بدء التحسين الجماعي', 'salah-seo'),
+                'stoppedByUser' => __('تم إيقاف العملية بواسطة المستخدم', 'salah-seo'),
+                'processingProduct' => __('معالجة المنتج %1$s من %2$s', 'salah-seo'),
+                'totalProducts' => __('إجمالي المنتجات', 'salah-seo'),
+                'optimized' => __('تم تحسينها', 'salah-seo'),
+                'skipped' => __('تم تجاهلها', 'salah-seo'),
+                'errors' => __('أخطاء', 'salah-seo'),
+                'confirmRemove' => __('تحذير: سيؤدي ذلك إلى إزالة كل الروابط الداخلية من المحتوى. هل تريد المتابعة؟', 'salah-seo'),
+                'noItems' => __('لا توجد عناصر لمعالجتها.', 'salah-seo'),
+                'optionPrefix' => $this->option_name,
             ));
         }
         
