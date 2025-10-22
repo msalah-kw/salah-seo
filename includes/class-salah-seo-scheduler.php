@@ -92,7 +92,7 @@ class Salah_SEO_Scheduler {
         $batch_size = !empty($settings['batch_size']) ? (int) $settings['batch_size'] : 5;
         $task_timeout = !empty($settings['task_timeout']) ? (int) $settings['task_timeout'] : 120;
         $per_item_budget = !empty($settings['per_item_time_budget']) ? (int) $settings['per_item_time_budget'] : 10;
-        $lock_ttl = max($task_timeout, $batch_size * max(1, $per_item_budget));
+        $lock_ttl = Salah_SEO_Helpers::calculate_lock_ttl($task_timeout, $batch_size, $per_item_budget, 15);
 
         $lock_token = Salah_SEO_Helpers::acquire_lock(self::CRON_HOOK, $lock_ttl);
 
@@ -140,8 +140,11 @@ class Salah_SEO_Scheduler {
 
                 $processed++;
 
-                if (!Salah_SEO_Helpers::refresh_lock(self::CRON_HOOK, $lock_token, $lock_ttl)) {
+                $refreshed = Salah_SEO_Helpers::refresh_lock(self::CRON_HOOK, $lock_token, $lock_ttl);
+
+                if (false === $refreshed) {
                     Salah_SEO_Helpers::log('Queue heartbeat refresh failed; lock may have been stolen.', 'warning');
+                    break;
                 }
 
                 if ($sleep_between > 0) {

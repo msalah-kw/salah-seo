@@ -320,25 +320,40 @@ class Salah_SEO_Helpers {
     }
 
     /**
-     * Attempt to acquire a transient-based lock to avoid duplicate work.
+     * Attempt to acquire an exclusive lock to avoid duplicate work.
      *
      * @param string $key Lock key.
      * @param int    $ttl Lock lifetime in seconds.
-     * @return bool True if lock acquired.
+     * @return string|false Lock token string on success, false if the lock is held elsewhere.
      */
     public static function acquire_lock($key, $ttl = 60) {
         $lock_key = self::get_lock_key($key);
+        $token = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : uniqid('salah_seo_', true);
+        $payload = array(
+            'token'      => $token,
+            'expires_at' => time() + max(1, (int) $ttl),
+        );
+
+        if (self::use_object_cache()) {
+            $added = wp_cache_add($lock_key, $payload, self::get_lock_cache_group(), $ttl);
+
+            if (!$added) {
+                $existing = wp_cache_get($lock_key, self::get_lock_cache_group());
+                if (is_array($existing) && !self::is_lock_expired($existing)) {
+                    return false;
+                }
+
+                wp_cache_set($lock_key, $payload, self::get_lock_cache_group(), $ttl);
+            }
+
+            return $token;
+        }
+
         $existing = get_transient($lock_key);
 
         if (is_array($existing) && !self::is_lock_expired($existing)) {
             return false;
         }
-
-        $token = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : uniqid('salah_seo_', true);
-        $payload = array(
-            'token'      => $token,
-            'expires_at' => time() + $ttl,
-        );
 
         set_transient($lock_key, $payload, $ttl);
 
@@ -351,24 +366,36 @@ class Salah_SEO_Helpers {
      * @param string $key   Lock key.
      * @param string $token Lock token returned on acquire.
      * @param int    $ttl   Lock lifetime in seconds.
-     * @return bool True if lock refreshed.
+     * @return string|false Lock token string on success, false on failure.
      */
     public static function refresh_lock($key, $token, $ttl) {
         $lock_key = self::get_lock_key($key);
+        $payload = array(
+            'token'      => $token,
+            'expires_at' => time() + max(1, (int) $ttl),
+        );
+
+        if (self::use_object_cache()) {
+            $existing = wp_cache_get($lock_key, self::get_lock_cache_group());
+
+            if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
+                return false;
+            }
+
+            wp_cache_set($lock_key, $payload, self::get_lock_cache_group(), $ttl);
+
+            return $token;
+        }
+
         $existing = get_transient($lock_key);
 
         if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
             return false;
         }
 
-        $payload = array(
-            'token'      => $token,
-            'expires_at' => time() + $ttl,
-        );
-
         set_transient($lock_key, $payload, $ttl);
 
-        return true;
+        return $token;
     }
 
     /**
@@ -376,23 +403,44 @@ class Salah_SEO_Helpers {
      *
      * @param string      $key   Lock key.
      * @param string|null $token Expected token. Null to force release.
-     * @return void
+     * @return string|false Released token (or empty string when forced) on success, false on failure.
      */
     public static function release_lock($key, $token = null) {
         $lock_key = self::get_lock_key($key);
 
+        if (self::use_object_cache()) {
+            if (null === $token) {
+                wp_cache_delete($lock_key, self::get_lock_cache_group());
+
+                return '';
+            }
+
+            $existing = wp_cache_get($lock_key, self::get_lock_cache_group());
+
+            if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
+                return false;
+            }
+
+            wp_cache_delete($lock_key, self::get_lock_cache_group());
+
+            return $existing['token'];
+        }
+
         if (null === $token) {
             delete_transient($lock_key);
-            return;
+
+            return '';
         }
 
         $existing = get_transient($lock_key);
 
         if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
-            return;
+            return false;
         }
 
         delete_transient($lock_key);
+
+        return $existing['token'];
     }
 
     /**
@@ -419,13 +467,56 @@ class Salah_SEO_Helpers {
     }
 
     /**
-     * Get the transient key for a lock identifier.
+     * Get the cache key for a lock identifier.
      *
      * @param string $key Raw lock key.
      * @return string
      */
     private static function get_lock_key($key) {
         return 'salah_seo_lock_' . md5($key);
+    }
+
+    /**
+     * Determine whether an object cache should be used for locking.
+     *
+     * @return bool
+     */
+    private static function use_object_cache() {
+        return function_exists('wp_using_ext_object_cache') && wp_using_ext_object_cache();
+    }
+
+    /**
+     * Retrieve the cache group used for lock payloads.
+     *
+     * @return string
+     */
+    private static function get_lock_cache_group() {
+        return 'salah-seo';
+    }
+
+    /**
+     * Calculate the minimum lock TTL required for a batch.
+     *
+     * @param int $task_timeout        Configured task timeout.
+     * @param int $batch_size          Number of items processed per batch.
+     * @param int $per_item_time_budget Estimated seconds per item.
+     * @param int $safety_margin       Additional buffer seconds.
+     * @return int
+     */
+    public static function calculate_lock_ttl($task_timeout, $batch_size, $per_item_time_budget, $safety_margin = 15) {
+        $task_timeout = max(0, (int) $task_timeout);
+        $batch_size = max(1, (int) $batch_size);
+        $per_item_time_budget = max(1, (int) $per_item_time_budget);
+        $safety_margin = max(0, (int) $safety_margin);
+
+        $estimated_duration = $batch_size * $per_item_time_budget;
+        $baseline = max($task_timeout, $estimated_duration);
+
+        if (0 === $baseline) {
+            $baseline = $estimated_duration;
+        }
+
+        return (int) max(1, $baseline + $safety_margin);
     }
 
     /**
@@ -509,7 +600,7 @@ class Salah_SEO_Helpers {
     }
 
     /**
-     * Apply internal link rules to HTML content.
+     * Apply internal link rules to HTML content while preserving protected regions.
      *
      * @param string $content Original content.
      * @param array  $rules   Normalized rules array.
@@ -520,11 +611,28 @@ class Salah_SEO_Helpers {
             return $content;
         }
 
+        $normalized_rules = array();
+
+        foreach ($rules as $rule) {
+            if (empty($rule['keyword']) || empty($rule['url'])) {
+                continue;
+            }
+
+            $normalized_rules[] = array(
+                'keyword' => $rule['keyword'],
+                'url'     => $rule['url'],
+            );
+        }
+
+        if (empty($normalized_rules)) {
+            return $content;
+        }
+
         $placeholders = array();
         $protected_content = self::protect_content_regions($content, $placeholders);
 
-        $dom = new DOMDocument();
         $libxml_previous_state = libxml_use_internal_errors(true);
+        $dom = new DOMDocument('1.0', 'UTF-8');
 
         if (!$dom->loadHTML('<?xml encoding="utf-8" ?>' . $protected_content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
             libxml_clear_errors();
@@ -537,61 +645,58 @@ class Salah_SEO_Helpers {
         libxml_use_internal_errors($libxml_previous_state);
 
         $xpath = new DOMXPath($dom);
-        $used_urls = array();
+        $used_urls = self::collect_existing_link_urls($xpath);
+        $paragraph_counts = array();
 
-        foreach ($rules as $rule) {
+        foreach ($normalized_rules as $rule) {
             $keyword = $rule['keyword'];
             $url = $rule['url'];
-            $max_repeats = isset($rule['repeats']) ? max(1, intval($rule['repeats'])) : 1;
-            $count = 0;
 
-            if (in_array($url, $used_urls, true)) {
+            if (isset($used_urls[$url])) {
                 continue;
             }
 
-            // Enforce a single link per target URL regardless of keyword matches.
-            $max_repeats = 1;
+            if (false === stripos($protected_content, $keyword)) {
+                continue;
+            }
 
-            $nodes = $xpath->query("//text()[not(ancestor::a) and not(ancestor::script) and not(ancestor::style) and not(ancestor::code) and not(ancestor::h1) and not(ancestor::h2) and not(ancestor::h3) and not(ancestor::h4) and not(ancestor::h5) and not(ancestor::h6) and not(ancestor::button) and not(ancestor::nav) and not(ancestor::figcaption) and not(ancestor::*[contains(concat(' ' , normalize-space(@class) , ' '), ' wp-block-buttons ')]) and not(ancestor::ul[contains(concat(' ' , normalize-space(@class) , ' '), ' toc ')]) and not(ancestor::ol[contains(concat(' ' , normalize-space(@class) , ' '), ' toc ')]) and normalize-space() != '']");
+            $paragraph_cap = apply_filters('salah_seo_paragraph_link_cap', 2, $rule);
+            $paragraph_cap = max(0, (int) $paragraph_cap);
 
-            foreach ($nodes as $node) {
-                if ($count >= $max_repeats) {
-                    break;
-                }
+            $candidate_nodes = self::collect_safe_text_nodes($xpath);
 
-                if (stripos($node->nodeValue, $keyword) === false) {
+            foreach ($candidate_nodes as $node) {
+                if (!$node instanceof DOMText || !$node->parentNode || isset($used_urls[$url])) {
                     continue;
                 }
 
-                $fragment = $dom->createDocumentFragment();
-                $parts = preg_split('/(' . preg_quote($keyword, '/') . ')/iu', $node->nodeValue, -1, PREG_SPLIT_DELIM_CAPTURE);
+                $text = $node->nodeValue;
 
-                foreach ($parts as $index => $part) {
-                    $is_keyword = ($index % 2 === 1) && $count < $max_repeats;
+                if ('' === trim($text) || false === stripos($text, $keyword)) {
+                    continue;
+                }
 
-                    if ($is_keyword) {
-                        $link = $dom->createElement('a', $part);
-                        $link->setAttribute('href', $url);
-                        $link->setAttribute('target', '_self');
-                        $link->setAttribute('rel', 'noopener');
-                        $fragment->appendChild($link);
-                        $count++;
-                    } else {
-                        $fragment->appendChild($dom->createTextNode($part));
+                $paragraph_key = self::identify_paragraph_key($node);
+
+                if ($paragraph_cap > 0) {
+                    $current = isset($paragraph_counts[$paragraph_key]) ? $paragraph_counts[$paragraph_key] : 0;
+
+                    if ($current >= $paragraph_cap) {
+                        continue;
                     }
                 }
 
-                if ($node->parentNode) {
-                    $node->parentNode->replaceChild($fragment, $node);
-                }
+                $inserted = self::inject_link_into_text_node($dom, $node, $keyword, $url);
 
-                if ($count >= $max_repeats) {
-                    break;
-                }
-            }
+                if ($inserted > 0) {
+                    $used_urls[$url] = true;
 
-            if ($count > 0) {
-                $used_urls[] = $url;
+                    if ($paragraph_cap > 0) {
+                        $paragraph_counts[$paragraph_key] = isset($paragraph_counts[$paragraph_key]) ? $paragraph_counts[$paragraph_key] + $inserted : $inserted;
+                    }
+
+                    break; // Enforce single anchor per destination URL.
+                }
             }
         }
 
@@ -599,6 +704,180 @@ class Salah_SEO_Helpers {
         $new_html = preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $new_html);
 
         return self::restore_protected_regions($new_html, $placeholders);
+    }
+
+    /**
+     * Collect safe text nodes that can receive injected anchors.
+     *
+     * @param DOMXPath $xpath DOMXPath instance.
+     * @return DOMText[]
+     */
+    private static function collect_safe_text_nodes(DOMXPath $xpath) {
+        $expression = "//text()[normalize-space() != ''"
+            . " and not(ancestor::a)"
+            . " and not(ancestor::script)"
+            . " and not(ancestor::style)"
+            . " and not(ancestor::code)"
+            . " and not(ancestor::pre)"
+            . " and not(ancestor::kbd)"
+            . " and not(ancestor::samp)"
+            . " and not(ancestor::var)"
+            . " and not(ancestor::button)"
+            . " and not(ancestor::nav)"
+            . " and not(ancestor::figcaption)"
+            . " and not(ancestor::h1)"
+            . " and not(ancestor::h2)"
+            . " and not(ancestor::h3)"
+            . " and not(ancestor::h4)"
+            . " and not(ancestor::h5)"
+            . " and not(ancestor::h6)"
+            . " and not(ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-buttons ')])"
+            . " and not(ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-button ')])"
+            . " and not(ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-code ')])"
+            . " and not(ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-preformatted ')])"
+            . " and not(ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-navigation ')])"
+            . " and not(ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-navigation-link ')])"
+            . " and not(ancestor::ul[contains(concat(' ', normalize-space(@class), ' '), ' toc ')])"
+            . " and not(ancestor::ol[contains(concat(' ', normalize-space(@class), ' '), ' toc ')])"
+            . " and not(ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' wp-block-table-of-contents ')])"
+            . ']';
+
+        $nodes = $xpath->query($expression);
+
+        if (!$nodes instanceof DOMNodeList) {
+            return array();
+        }
+
+        $safe_nodes = array();
+
+        foreach ($nodes as $node) {
+            if ($node instanceof DOMText) {
+                $safe_nodes[] = $node;
+            }
+        }
+
+        return $safe_nodes;
+    }
+
+    /**
+     * Inject a single anchor into the provided text node when a safe keyword match is found.
+     *
+     * @param DOMDocument $dom     DOM document.
+     * @param DOMText     $node    Text node.
+     * @param string      $keyword Keyword to match.
+     * @param string      $url     Destination URL.
+     * @return int Number of anchors inserted (0 or 1).
+     */
+    private static function inject_link_into_text_node(DOMDocument $dom, DOMText $node, $keyword, $url) {
+        $pattern = self::build_keyword_pattern($keyword);
+        $segments = preg_split($pattern, $node->nodeValue, 2, PREG_SPLIT_DELIM_CAPTURE);
+
+        if (empty($segments) || count($segments) < 3) {
+            return 0;
+        }
+
+        list($before, $matched, $after) = $segments;
+
+        if ($matched === '') {
+            return 0;
+        }
+
+        $fragment = $dom->createDocumentFragment();
+
+        if ($before !== '') {
+            $fragment->appendChild($dom->createTextNode($before));
+        }
+
+        $link = $dom->createElement('a');
+        $link->appendChild($dom->createTextNode($matched));
+        $link->setAttribute('href', $url);
+        $link->setAttribute('target', '_self');
+        $link->setAttribute('rel', 'noopener');
+        $fragment->appendChild($link);
+
+        if ($after !== '') {
+            $fragment->appendChild($dom->createTextNode($after));
+        }
+
+        if ($node->parentNode) {
+            $node->parentNode->replaceChild($fragment, $node);
+
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /**
+     * Build a Unicode-aware boundary-safe regex pattern for a keyword.
+     *
+     * @param string $keyword Keyword text.
+     * @return string
+     */
+    private static function build_keyword_pattern($keyword) {
+        $quoted = preg_quote($keyword, '/');
+
+        return '/(?<![\p{L}\p{N}_])(' . $quoted . ')(?![\p{L}\p{N}_])/iu';
+    }
+
+    /**
+     * Identify a stable key for the paragraph-like ancestor of a node.
+     *
+     * @param DOMNode $node Node to inspect.
+     * @return string
+     */
+    private static function identify_paragraph_key(DOMNode $node) {
+        $element = $node->parentNode;
+
+        while ($element && $element->nodeType !== XML_ELEMENT_NODE) {
+            $element = $element->parentNode;
+        }
+
+        while ($element && $element->nodeType === XML_ELEMENT_NODE) {
+            $tag = strtolower($element->nodeName);
+
+            if (in_array($tag, array('p', 'li', 'div', 'section', 'article', 'td', 'th'), true)) {
+                if (method_exists($element, 'getNodePath')) {
+                    $path = $element->getNodePath();
+
+                    if (!empty($path)) {
+                        return $path;
+                    }
+                }
+
+                return $tag . '_' . spl_object_hash($element);
+            }
+
+            $element = $element->parentNode;
+        }
+
+        return 'global';
+    }
+
+    /**
+     * Gather URLs already linked in the DOM to keep processing idempotent.
+     *
+     * @param DOMXPath $xpath DOMXPath instance.
+     * @return array<string,bool>
+     */
+    private static function collect_existing_link_urls(DOMXPath $xpath) {
+        $anchors = $xpath->query('//a[@href]');
+
+        if (!$anchors instanceof DOMNodeList) {
+            return array();
+        }
+
+        $urls = array();
+
+        foreach ($anchors as $anchor) {
+            $href = trim($anchor->getAttribute('href'));
+
+            if ($href !== '') {
+                $urls[$href] = true;
+            }
+        }
+
+        return $urls;
     }
 
     /**
@@ -629,7 +908,17 @@ class Salah_SEO_Helpers {
             return $content;
         }
 
-        foreach ($placeholders as $token => $original) {
+        $tokens = array_keys($placeholders);
+
+        usort(
+            $tokens,
+            function ($a, $b) {
+                return strlen($b) - strlen($a);
+            }
+        );
+
+        foreach ($tokens as $token) {
+            $original = $placeholders[$token];
             $content = str_replace($token, $original, $content);
         }
 
@@ -655,7 +944,7 @@ class Salah_SEO_Helpers {
             $regex,
             function ($match) use (&$placeholders, &$counter) {
                 $raw = $match[0];
-                $token = Salah_SEO_Helpers::generate_placeholder_token(++$counter);
+                $token = self::generate_placeholder_token(++$counter);
                 $placeholders[$token] = $raw;
 
                 return $token;
@@ -704,6 +993,10 @@ class Salah_SEO_Helpers {
 
         $protected_blocks = array('core/shortcode', 'core/html', 'core/button', 'core/buttons', 'core/navigation', 'core/navigation-link', 'core/code');
 
+        if (function_exists('apply_filters')) {
+            $protected_blocks = apply_filters('salah_seo_protected_block_types', $protected_blocks);
+        }
+
         return preg_replace_callback(
             $pattern,
             function ($match) use (&$placeholders, &$counter, $protected_blocks) {
@@ -713,7 +1006,7 @@ class Salah_SEO_Helpers {
                     return $match[0];
                 }
 
-                $token = Salah_SEO_Helpers::generate_placeholder_token(++$counter);
+                $token = self::generate_placeholder_token(++$counter);
                 $placeholders[$token] = $match[0];
 
                 return $token;
