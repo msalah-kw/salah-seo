@@ -1,0 +1,250 @@
+/**
+ * Admin Styles for Salah SEO Plugin
+ */
+
+.salah-seo-header {
+    background: #f1f1f1;
+    padding: 15px;
+    border-left: 4px solid #0073aa;
+    margin: 20px 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.salah-seo-info-box {
+    background: #fff;
+    border: 1px solid #ddd;
+    padding: 20px;
+    margin: 20px 0;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.salah-seo-info-box h3 {
+    margin-top: 0;
+    color: #0073aa;
+    font-size: 16px;
+}
+
+.salah-seo-info-box ul {
+    list-style: none;
+    padding: 0;
+    margin: 10px 0;
+}
+
+.salah-seo-info-box li {
+    padding: 8px 0;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.salah-seo-footer {
+    margin-top: 30px;
+    padding-top: 20px;
+    border-top: 1px solid #ddd;
+    color: #666;
+    font-size: 12px;
+    text-align: center;
+}
+
+/* Internal Links Management */
+.internal-link-row {
+    margin-bottom: 15px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px;
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.internal-link-row input[type="text"] {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 14px;
+}
+
+.internal-link-row input[type="text"]:focus {
+    border-color: #0073aa;
+    box-shadow: 0 0 0 1px #0073aa;
+    outline: none;
+}
+
+.remove-link {
+    background: #dc3232;
+    color: white;
+    border: none;
+    padding: 8px 12px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 12px;
+    transition: background-color 0.2s;
+}
+
+.remove-link:hover {
+    background: #a00;
+}
+
+#add-internal-link {
+    margin-top: 15px;
+    background: #0073aa;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 14px;
+    transition: background-color 0.2s;
+}
+
+#add-internal-link:hover {
+    background: #005a87;
+}
+
+/* Form Styling */
+.form-table th {
+    width: 220px;
+    padding: 20px 10px 20px 0;
+    vertical-align: top;
+}
+
+.form-table td {
+    padding: 15px 10px;
+}
+
+.form-table input[type="checkbox"] {
+    margin-right: 8px;
+    transform: scale(1.1);
+}
+
+.form-table textarea {
+    width: 100%;
+    max-width: 600px;
+    min-height: 80px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.4;
+}
+
+.form-table textarea:focus {
+    border-color: #0073aa;
+    box-shadow: 0 0 0 1px #0073aa;
+    outline: none;
+}
+
+/* Settings Sections */
+h2.title {
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+    color: #23282d;
+}
+
+.form-table tr:hover {
+    background-color: #f9f9f9;
+}
+
+/* Success/Error Messages */
+.notice.salah-seo-notice {
+    border-left-width: 4px;
+    padding: 12px;
+}
+
+.notice.salah-seo-notice p {
+    margin: 0;
+    font-size: 14px;
+}
+
+/* Responsive Design */
+@media screen and (max-width: 782px) {
+    .internal-link-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .internal-link-row input[type="text"] {
+        margin-bottom: 10px;
+    }
+    
+    .form-table th,
+    .form-table td {
+        display: block;
+        width: 100%;
+        padding: 10px 0;
+    }
+    
+    .form-table th {
+        border-bottom: none;
+    }
+}
+
+/* Loading States */
+.salah-seo-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.salah-seo-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #0073aa;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 10px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Feature Toggle Styling */
+.feature-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.feature-toggle input[type="checkbox"] {
+    position: relative;
+}
+
+.feature-toggle label {
+    font-weight: 500;
+    color: #555;
+}
+
+/* Help Text */
+.description {
+    font-style: italic;
+    color: #666;
+    font-size: 13px;
+    margin-top: 5px;
+}
+
+/* Plugin Header */
+.salah-seo-plugin-header {
+    background: linear-gradient(135deg, #0073aa 0%, #005a87 100%);
+    color: white;
+    padding: 20px;
+    margin: 0 -20px 20px -20px;
+    border-radius: 0 0 8px 8px;
+}
+
+.salah-seo-plugin-header h1 {
+    color: white;
+    margin: 0;
+    font-size: 24px;
+}
+
+.salah-seo-plugin-header p {
+    margin: 10px 0 0 0;
+    opacity: 0.9;
+}
