@@ -235,20 +235,608 @@ class Salah_SEO_Helpers {
             'enable_image_optimization' => true,
             'enable_internal_linking' => true,
             'enable_canonical_fix' => true,
+            'enable_redirect_manager' => true,
+            'enable_schema_markup' => true,
+            'enable_social_meta' => true,
+            'background_processing' => true,
+            'batch_size' => 5,
+            'batch_delay' => 5,
+            'task_timeout' => 120,
+            'queries_per_minute' => 120,
+            'per_item_time_budget' => 10,
+            'dry_run_enabled' => true,
+            'fallback_og_image' => '',
             'default_meta_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_short_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_full_description' => 'أفضل منتجات الفيب وأكياس النيكوتين في الكويت. نوفر لك تشكيلة واسعة من أجهزة الفيب، بودات، نكهات، وأظرف نيكوتين أصلية 100%. تمتع بتجربة تدخين الكتروني آمنة، سهلة الاستخدام، وبأسعار تنافسية مع خدمة توصيل سريعة ومجانية داخل الكويت. منتجاتنا تناسب المبتدئين والمحترفين، وتشمل أشهر العلامات التجارية في مجال الفيب. اختر الآن البديل العصري للتدخين التقليدي واستمتع بجودة عالية وتجربة مختلفة.',
-            'internal_links' => array(
-                'أكياس النيكوتين' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/',
-                'نيكوتين' => 'https://nicotinekw.com/natural-nicotine-in-the-body/',
-                'فيب' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/',
-                'نكهات' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/',
-                'الكويت' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/'
+            'internal_link_rules' => array(
+                array('keyword' => 'أكياس النيكوتين', 'url' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/', 'repeats' => 1),
+                array('keyword' => 'نيكوتين', 'url' => 'https://nicotinekw.com/natural-nicotine-in-the-body/', 'repeats' => 1),
+                array('keyword' => 'فيب', 'url' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/', 'repeats' => 1),
+                array('keyword' => 'نكهات', 'url' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/', 'repeats' => 1),
+                array('keyword' => 'الكويت', 'url' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/', 'repeats' => 1)
             )
         );
-        
+
         $settings = get_option('salah_seo_settings', array());
-        
-        return wp_parse_args($settings, $defaults);
+        $settings = wp_parse_args($settings, $defaults);
+
+        // Backward compatibility: convert legacy associative links to structured rules
+        if (!empty($settings['internal_links']) && empty($settings['internal_link_rules'])) {
+            $settings['internal_link_rules'] = self::format_internal_link_rules($settings['internal_links']);
+        }
+
+        return $settings;
+    }
+
+    /**
+     * Retrieve the persistent queue state.
+     *
+     * @return array
+     */
+    public static function get_task_queue() {
+        $queue = get_option('salah_seo_task_queue', array());
+
+        if (!is_array($queue)) {
+            $queue = array();
+        }
+
+        return $queue;
+    }
+
+    /**
+     * Persist the queue back to the database.
+     *
+     * @param array $queue Queue payload.
+     * @return void
+     */
+    public static function update_task_queue($queue) {
+        update_option('salah_seo_task_queue', array_values($queue), false);
+    }
+
+    /**
+     * Get processing state metadata.
+     *
+     * @return array
+     */
+    public static function get_processing_state() {
+        $state = get_option('salah_seo_task_state', array());
+
+        if (!is_array($state)) {
+            $state = array();
+        }
+
+        return $state;
+    }
+
+    /**
+     * Update processing state metadata.
+     *
+     * @param array $state State payload.
+     * @return void
+     */
+    public static function update_processing_state($state) {
+        update_option('salah_seo_task_state', $state, false);
+    }
+
+    /**
+     * Attempt to acquire a transient-based lock to avoid duplicate work.
+     *
+     * @param string $key Lock key.
+     * @param int    $ttl Lock lifetime in seconds.
+     * @return bool True if lock acquired.
+     */
+    public static function acquire_lock($key, $ttl = 60) {
+        $lock_key = self::get_lock_key($key);
+        $existing = get_transient($lock_key);
+
+        if (is_array($existing) && !self::is_lock_expired($existing)) {
+            return false;
+        }
+
+        $token = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : uniqid('salah_seo_', true);
+        $payload = array(
+            'token'      => $token,
+            'expires_at' => time() + $ttl,
+        );
+
+        set_transient($lock_key, $payload, $ttl);
+
+        return $token;
+    }
+
+    /**
+     * Refresh an existing lock heartbeat.
+     *
+     * @param string $key   Lock key.
+     * @param string $token Lock token returned on acquire.
+     * @param int    $ttl   Lock lifetime in seconds.
+     * @return bool True if lock refreshed.
+     */
+    public static function refresh_lock($key, $token, $ttl) {
+        $lock_key = self::get_lock_key($key);
+        $existing = get_transient($lock_key);
+
+        if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
+            return false;
+        }
+
+        $payload = array(
+            'token'      => $token,
+            'expires_at' => time() + $ttl,
+        );
+
+        set_transient($lock_key, $payload, $ttl);
+
+        return true;
+    }
+
+    /**
+     * Release an existing lock.
+     *
+     * @param string      $key   Lock key.
+     * @param string|null $token Expected token. Null to force release.
+     * @return void
+     */
+    public static function release_lock($key, $token = null) {
+        $lock_key = self::get_lock_key($key);
+
+        if (null === $token) {
+            delete_transient($lock_key);
+            return;
+        }
+
+        $existing = get_transient($lock_key);
+
+        if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
+            return;
+        }
+
+        delete_transient($lock_key);
+    }
+
+    /**
+     * Register a shutdown handler to safely release a lock on fatal termination.
+     *
+     * @param string $key   Lock key.
+     * @param string $token Lock token.
+     * @return void
+     */
+    public static function register_lock_shutdown($key, $token) {
+        register_shutdown_function(array(__CLASS__, 'release_lock'), $key, $token);
+    }
+
+    /**
+     * Determine if an existing lock payload has expired.
+     *
+     * @param array $payload Lock payload.
+     * @return bool
+     */
+    private static function is_lock_expired($payload) {
+        $expires_at = isset($payload['expires_at']) ? (int) $payload['expires_at'] : 0;
+
+        return $expires_at > 0 && $expires_at < time();
+    }
+
+    /**
+     * Get the transient key for a lock identifier.
+     *
+     * @param string $key Raw lock key.
+     * @return string
+     */
+    private static function get_lock_key($key) {
+        return 'salah_seo_lock_' . md5($key);
+    }
+
+    /**
+     * Get fallback image URL used for social sharing metadata.
+     *
+     * @return string
+     */
+    public static function get_fallback_image() {
+        $settings = self::get_plugin_settings();
+
+        if (!empty($settings['fallback_og_image'])) {
+            return esc_url_raw($settings['fallback_og_image']);
+        }
+
+        $site_icon = get_site_icon_url();
+
+        if (!empty($site_icon)) {
+            return esc_url_raw($site_icon);
+        }
+
+        $custom_logo = get_theme_mod('custom_logo');
+
+        if ($custom_logo) {
+            $image = wp_get_attachment_image_src($custom_logo, 'full');
+            if (!empty($image[0])) {
+                return esc_url_raw($image[0]);
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Normalize internal link rules from multiple formats
+     *
+     * @param array $raw_rules Raw rules array
+     * @return array
+     */
+    public static function format_internal_link_rules($raw_rules) {
+        $rules = array();
+
+        if (empty($raw_rules) || !is_array($raw_rules)) {
+            return $rules;
+        }
+
+        // If associative array keyword => url
+        if (array_keys($raw_rules) !== range(0, count($raw_rules) - 1)) {
+            foreach ($raw_rules as $keyword => $url) {
+                $valid_url = self::validate_url($url);
+                $keyword = sanitize_text_field($keyword);
+                if ($keyword && $valid_url) {
+                    $rules[] = array(
+                        'keyword' => $keyword,
+                        'url' => $valid_url,
+                        'repeats' => 1,
+                    );
+                }
+            }
+            return $rules;
+        }
+
+        foreach ($raw_rules as $rule) {
+            if (!is_array($rule)) {
+                continue;
+            }
+
+            $keyword = isset($rule['keyword']) ? sanitize_text_field($rule['keyword']) : '';
+            $url = isset($rule['url']) ? self::validate_url($rule['url']) : false;
+            $repeats = isset($rule['repeats']) ? max(1, intval($rule['repeats'])) : 1;
+
+            if ($keyword && $url) {
+                $rules[] = array(
+                    'keyword' => $keyword,
+                    'url' => $url,
+                    'repeats' => $repeats,
+                );
+            }
+        }
+
+        return $rules;
+    }
+
+    /**
+     * Apply internal link rules to HTML content.
+     *
+     * @param string $content Original content.
+     * @param array  $rules   Normalized rules array.
+     * @return string Updated content.
+     */
+    public static function apply_internal_links_to_content($content, $rules) {
+        if (empty($content) || empty($rules)) {
+            return $content;
+        }
+
+        $placeholders = array();
+        $protected_content = self::protect_content_regions($content, $placeholders);
+
+        $dom = new DOMDocument();
+        $libxml_previous_state = libxml_use_internal_errors(true);
+
+        if (!$dom->loadHTML('<?xml encoding="utf-8" ?>' . $protected_content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
+            libxml_clear_errors();
+            libxml_use_internal_errors($libxml_previous_state);
+
+            return $content;
+        }
+
+        libxml_clear_errors();
+        libxml_use_internal_errors($libxml_previous_state);
+
+        $xpath = new DOMXPath($dom);
+        $used_urls = array();
+
+        foreach ($rules as $rule) {
+            $keyword = $rule['keyword'];
+            $url = $rule['url'];
+            $max_repeats = isset($rule['repeats']) ? max(1, intval($rule['repeats'])) : 1;
+            $count = 0;
+
+            if (in_array($url, $used_urls, true)) {
+                continue;
+            }
+
+            // Enforce a single link per target URL regardless of keyword matches.
+            $max_repeats = 1;
+
+            $nodes = $xpath->query("//text()[not(ancestor::a) and not(ancestor::script) and not(ancestor::style) and not(ancestor::code) and not(ancestor::h1) and not(ancestor::h2) and not(ancestor::h3) and not(ancestor::h4) and not(ancestor::h5) and not(ancestor::h6) and not(ancestor::button) and not(ancestor::nav) and not(ancestor::figcaption) and not(ancestor::*[contains(concat(' ' , normalize-space(@class) , ' '), ' wp-block-buttons ')]) and not(ancestor::ul[contains(concat(' ' , normalize-space(@class) , ' '), ' toc ')]) and not(ancestor::ol[contains(concat(' ' , normalize-space(@class) , ' '), ' toc ')]) and normalize-space() != '']");
+
+            foreach ($nodes as $node) {
+                if ($count >= $max_repeats) {
+                    break;
+                }
+
+                if (stripos($node->nodeValue, $keyword) === false) {
+                    continue;
+                }
+
+                $fragment = $dom->createDocumentFragment();
+                $parts = preg_split('/(' . preg_quote($keyword, '/') . ')/iu', $node->nodeValue, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+                foreach ($parts as $index => $part) {
+                    $is_keyword = ($index % 2 === 1) && $count < $max_repeats;
+
+                    if ($is_keyword) {
+                        $link = $dom->createElement('a', $part);
+                        $link->setAttribute('href', $url);
+                        $link->setAttribute('target', '_self');
+                        $link->setAttribute('rel', 'noopener');
+                        $fragment->appendChild($link);
+                        $count++;
+                    } else {
+                        $fragment->appendChild($dom->createTextNode($part));
+                    }
+                }
+
+                if ($node->parentNode) {
+                    $node->parentNode->replaceChild($fragment, $node);
+                }
+
+                if ($count >= $max_repeats) {
+                    break;
+                }
+            }
+
+            if ($count > 0) {
+                $used_urls[] = $url;
+            }
+        }
+
+        $new_html = $dom->saveHTML();
+        $new_html = preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $new_html);
+
+        return self::restore_protected_regions($new_html, $placeholders);
+    }
+
+    /**
+     * Replace shortcode and protected block regions with placeholders.
+     *
+     * @param string $content Original content.
+     * @param array  $placeholders Reference placeholder map.
+     * @return string
+     */
+    private static function protect_content_regions($content, array &$placeholders) {
+        $counter = 0;
+
+        $content = self::protect_shortcodes($content, $placeholders, $counter);
+        $content = self::protect_block_regions($content, $placeholders, $counter);
+
+        return $content;
+    }
+
+    /**
+     * Restore placeholder regions back to their original markup.
+     *
+     * @param string $content Filtered content.
+     * @param array  $placeholders Placeholder map.
+     * @return string
+     */
+    private static function restore_protected_regions($content, array $placeholders) {
+        if (empty($placeholders)) {
+            return $content;
+        }
+
+        foreach ($placeholders as $token => $original) {
+            $content = str_replace($token, $original, $content);
+        }
+
+        return $content;
+    }
+
+    /**
+     * Protect inline shortcodes with placeholders.
+     *
+     * @param string $content Content.
+     * @param array  $placeholders Placeholder map.
+     * @param int    $counter Placeholder index.
+     * @return string
+     */
+    private static function protect_shortcodes($content, array &$placeholders, &$counter) {
+        if (function_exists('get_shortcode_regex')) {
+            $regex = '/' . get_shortcode_regex() . '/s';
+        } else {
+            $regex = '/\[([a-zA-Z0-9_-]+)(?:[^\]]*)\](?:.*?\[\/\1\])?/s';
+        }
+
+        return preg_replace_callback(
+            $regex,
+            function ($match) use (&$placeholders, &$counter) {
+                $raw = $match[0];
+                $token = Salah_SEO_Helpers::generate_placeholder_token(++$counter);
+                $placeholders[$token] = $raw;
+
+                return $token;
+            },
+            $content
+        );
+    }
+
+    /**
+     * Protect block regions that should not be modified.
+     *
+     * @param string $content Content.
+     * @param array  $placeholders Placeholder map.
+     * @param int    $counter Placeholder index.
+     * @return string
+     */
+    private static function protect_block_regions($content, array &$placeholders, &$counter) {
+        $has_blocks = function_exists('has_blocks') ? has_blocks($content) : (false !== strpos($content, '<!-- wp:'));
+
+        if (!function_exists('parse_blocks') || !$has_blocks) {
+            return self::protect_block_comments($content, $placeholders, $counter);
+        }
+
+        $blocks = parse_blocks($content);
+        $protected = self::collect_protected_blocks($blocks);
+
+        foreach ($protected as $original) {
+            $token = self::generate_placeholder_token(++$counter);
+            $placeholders[$token] = $original;
+            $content = str_replace($original, $token, $content);
+        }
+
+        return $content;
+    }
+
+    /**
+     * Fallback block protection when block parser is unavailable.
+     *
+     * @param string $content Content string.
+     * @param array  $placeholders Placeholder map.
+     * @param int    $counter Placeholder counter.
+     * @return string
+     */
+    private static function protect_block_comments($content, array &$placeholders, &$counter) {
+        $pattern = '/<!--\s+wp:([^\s]+)[^>]*-->.*?<!--\s+\/wp:\1\s+-->/is';
+
+        $protected_blocks = array('core/shortcode', 'core/html', 'core/button', 'core/buttons', 'core/navigation', 'core/navigation-link', 'core/code');
+
+        return preg_replace_callback(
+            $pattern,
+            function ($match) use (&$placeholders, &$counter, $protected_blocks) {
+                $name = isset($match[1]) ? trim($match[1]) : '';
+
+                if (!in_array($name, $protected_blocks, true)) {
+                    return $match[0];
+                }
+
+                $token = Salah_SEO_Helpers::generate_placeholder_token(++$counter);
+                $placeholders[$token] = $match[0];
+
+                return $token;
+            },
+            $content
+        );
+    }
+
+    /**
+     * Gather serialized markup for protected blocks using the block parser.
+     *
+     * @param array $blocks Parsed blocks.
+     * @return array
+     */
+    private static function collect_protected_blocks($blocks) {
+        $protected = array();
+        $protected_types = array(
+            'core/shortcode',
+            'core/html',
+            'core/button',
+            'core/buttons',
+            'core/navigation',
+            'core/navigation-link',
+            'core/code',
+        );
+
+        if (function_exists('apply_filters')) {
+            $protected_types = apply_filters('salah_seo_protected_block_types', $protected_types);
+        }
+
+        foreach ($blocks as $block) {
+            if (!is_array($block)) {
+                continue;
+            }
+
+            $block_name = isset($block['blockName']) ? $block['blockName'] : '';
+
+            if (in_array($block_name, $protected_types, true)) {
+                if (function_exists('serialize_block')) {
+                    $protected[] = serialize_block($block);
+                } elseif (!empty($block['innerHTML'])) {
+                    $protected[] = $block['innerHTML'];
+                }
+                continue;
+            }
+
+            if (!empty($block['innerBlocks'])) {
+                $protected = array_merge($protected, self::collect_protected_blocks($block['innerBlocks']));
+            }
+        }
+
+        return array_unique($protected);
+    }
+
+    /**
+     * Generate a deterministic placeholder token.
+     *
+     * @param int $counter Placeholder index.
+     * @return string
+     */
+    private static function generate_placeholder_token($counter) {
+        return sprintf('%%SALAHSEO_PROTECTED_%d%%', $counter);
+    }
+
+    /**
+     * Build internal link suggestions without altering content.
+     *
+     * @param int $post_id Post ID.
+     * @return array
+     */
+    public static function generate_internal_link_suggestions($post_id) {
+        $post = get_post($post_id);
+        if (!$post || empty($post->post_content)) {
+            return array();
+        }
+
+        $settings = self::get_plugin_settings();
+        $rules = isset($settings['internal_link_rules']) ? self::format_internal_link_rules($settings['internal_link_rules']) : array();
+
+        if (empty($rules)) {
+            return array();
+        }
+
+        $content = $post->post_content;
+        $suggestions = array();
+
+        foreach ($rules as $rule) {
+            if (empty($rule['keyword']) || empty($rule['url'])) {
+                continue;
+            }
+
+            if (false !== stripos($content, $rule['url'])) {
+                continue;
+            }
+
+            if (false === stripos($content, $rule['keyword'])) {
+                continue;
+            }
+
+            $suggestions[] = array(
+                'keyword' => $rule['keyword'],
+                'url' => $rule['url'],
+                'potential_matches' => (int) preg_match_all('/' . preg_quote($rule['keyword'], '/') . '/iu', $content, $dummy),
+            );
+        }
+
+        return $suggestions;
+    }
+
+    /**
+     * Remove internal links that point to the current site from content.
+     *
+     * @param string $content Original content.
+     * @return string Updated content without internal links.
+     */
+    public static function remove_internal_links_from_content($content) {
+        if (empty($content)) {
+            return $content;
+        }
+
+        $site_url = preg_quote(home_url(), '/');
+        $pattern = '/<a\s+(?:[^>]*?\s+)?href=["\'](' . $site_url . '[^"\']*)["\'][^>]*?>(.*?)<\/a>/is';
+
+        return preg_replace($pattern, '$2', $content);
     }
 }
