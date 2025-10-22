@@ -14,6 +14,8 @@
                 unsaved: 'Unsaved changes',
                 unsavedWarning: 'You have unsaved changes. Are you sure you want to leave?',
                 bulkStart: 'Start bulk optimization',
+                dryRun: 'معاينة بدون حفظ',
+                dryRunNotice: 'وضع المعاينة مفعّل، لن يتم حفظ أي تغييرات.',
                 stoppedByUser: 'Operation stopped by user',
                 processingProduct: 'Processing product %1$s of %2$s',
                 totalProducts: 'Total products',
@@ -115,7 +117,7 @@
             $('#salah-seo-bulk-results').addClass('hidden');
         }
 
-        function showBulkResults(progress) {
+        function showBulkResults(progress, dryRun) {
             var summaryHtml = [
                 '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">',
                     '<div><span class="block text-xs text-slate-500">' + window.salahSeoLabels.totalProducts + '</span><strong class="text-lg text-slate-800">' + progress.total + '</strong></div>',
@@ -126,6 +128,9 @@
             ].join('');
 
             $('#results-summary').html(summaryHtml);
+            if (dryRun) {
+                $('#results-summary').append('<p class="mt-4 text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">' + window.salahSeoLabels.dryRunNotice + '</p>');
+            }
             $('#salah-seo-bulk-results').removeClass('hidden');
         }
 
@@ -225,6 +230,7 @@
             window.salahSeoAjax = {
                 ajaxurl: ajaxurl || '/wp-admin/admin-ajax.php',
                 nonce: getNonce('#salah_seo_bulk_nonce'),
+                currentDryRun: false,
                 strings: {
                     starting: 'بدء العملية...',
                     processing: 'جاري المعالجة...',
@@ -234,12 +240,12 @@
             };
         }
 
-        $('#salah-seo-bulk-start').on('click', function() {
+        function startBulkProcessing(dryRun) {
             if (bulkProcessing) {
                 return;
             }
 
-            var startBtn = $(this);
+            var startBtn = dryRun ? $('#salah-seo-bulk-dry-run') : $('#salah-seo-bulk-start');
             var stopBtn = $('#salah-seo-bulk-stop');
             resetBulkUi();
 
@@ -249,17 +255,21 @@
                 dataType: 'json',
                 data: {
                     action: 'salah_seo_bulk_start',
-                    nonce: salahSeoAjax.nonce
+                    nonce: salahSeoAjax.nonce,
+                    dry_run: dryRun ? 1 : 0
                 },
                 beforeSend: function() {
                     bulkProcessing = true;
-                    startBtn.prop('disabled', true).html('<span class="dashicons dashicons-update-alt animate-spin"></span>' + salahSeoAjax.strings.processing);
+                    salahSeoAjax.currentDryRun = dryRun;
+                    $('#salah-seo-bulk-start, #salah-seo-bulk-dry-run').prop('disabled', true);
+                    startBtn.html('<span class="dashicons dashicons-update-alt animate-spin"></span>' + salahSeoAjax.strings.processing);
                     stopBtn.removeClass('hidden');
                 }
             }).done(function(response) {
                 if (!response || !response.success) {
                     bulkProcessing = false;
-                    startBtn.prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                    $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                    $('#salah-seo-bulk-dry-run').prop('disabled', false).html('<span class="dashicons dashicons-visibility"></span>' + window.salahSeoLabels.dryRun);
                     stopBtn.addClass('hidden');
                     alert(response && response.data ? response.data.message : salahSeoAjax.strings.error);
                     return;
@@ -267,6 +277,9 @@
 
                 $('#progress-total').text(response.data.total);
                 $('#progress-status').text(salahSeoAjax.strings.processing);
+                if (response.data.dry_run) {
+                    addLogEntry($('#progress-log'), window.salahSeoLabels.dryRunNotice, 'info');
+                }
                 addLogEntry($('#progress-log'), response.data.message, 'info');
 
                 currentBulkInterval = setInterval(function() {
@@ -274,10 +287,25 @@
                 }, 3000);
             }).fail(function() {
                 bulkProcessing = false;
-                startBtn.prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                $('#salah-seo-bulk-dry-run').prop('disabled', false).html('<span class="dashicons dashicons-visibility"></span>' + window.salahSeoLabels.dryRun);
                 stopBtn.addClass('hidden');
                 alert(salahSeoAjax.strings.error);
             });
+        }
+
+        $('#salah-seo-bulk-start').on('click', function() {
+            if (bulkProcessing) {
+                return;
+            }
+            startBulkProcessing(false);
+        });
+
+        $('#salah-seo-bulk-dry-run').on('click', function() {
+            if (bulkProcessing) {
+                return;
+            }
+            startBulkProcessing(true);
         });
 
         $('#salah-seo-bulk-stop').on('click', function() {
@@ -287,6 +315,7 @@
             clearInterval(currentBulkInterval);
             bulkProcessing = false;
             $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+            $('#salah-seo-bulk-dry-run').prop('disabled', false).html('<span class="dashicons dashicons-visibility"></span>' + window.salahSeoLabels.dryRun);
             $(this).addClass('hidden');
             addLogEntry($('#progress-log'), window.salahSeoLabels.stoppedByUser, 'warning');
             $('#progress-status').text(window.salahSeoLabels.stoppedByUser);
@@ -304,7 +333,8 @@
                 dataType: 'json',
                 data: {
                     action: 'salah_seo_bulk_process',
-                    nonce: salahSeoAjax.nonce
+                    nonce: salahSeoAjax.nonce,
+                    dry_run: salahSeoAjax.currentDryRun ? 1 : 0
                 }
             }).done(function(response) {
                 if (!response || !response.success) {
@@ -320,18 +350,28 @@
 
                 if (data.batch_results) {
                     data.batch_results.forEach(function(result) {
-                        addLogEntry($('#progress-log'), result.title + ': ' + result.message, result.status === 'optimized' ? 'success' : result.status === 'error' ? 'error' : 'info');
+                        var logType = 'info';
+                        if (result.status === 'optimized') {
+                            logType = 'success';
+                        } else if (result.status === 'preview') {
+                            logType = 'warning';
+                        } else if (result.status === 'error') {
+                            logType = 'error';
+                        }
+                        addLogEntry($('#progress-log'), result.title + ': ' + result.message, logType);
                     });
                 }
 
                 if (data.is_complete) {
                     clearInterval(currentBulkInterval);
                     bulkProcessing = false;
-                    startBtn.prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                    $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                    $('#salah-seo-bulk-dry-run').prop('disabled', false).html('<span class="dashicons dashicons-visibility"></span>' + window.salahSeoLabels.dryRun);
                     stopBtn.addClass('hidden');
-                    $('#progress-status').text(salahSeoAjax.strings.completed);
-                    showBulkResults(data.progress);
-                    addLogEntry($('#progress-log'), salahSeoAjax.strings.completed, 'success');
+                    $('#progress-status').text(salahSeoAjax.strings.completed + (salahSeoAjax.currentDryRun ? ' (Dry-Run)' : ''));
+                    showBulkResults(data.progress, data.dry_run);
+                    addLogEntry($('#progress-log'), salahSeoAjax.strings.completed, salahSeoAjax.currentDryRun ? 'warning' : 'success');
+                    salahSeoAjax.currentDryRun = false;
                 }
             }).fail(function(_, __, error) {
                 addLogEntry($('#progress-log'), error || salahSeoAjax.strings.error, 'error');

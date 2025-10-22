@@ -235,6 +235,16 @@ class Salah_SEO_Helpers {
             'enable_image_optimization' => true,
             'enable_internal_linking' => true,
             'enable_canonical_fix' => true,
+            'enable_redirect_manager' => true,
+            'enable_schema_markup' => true,
+            'enable_social_meta' => true,
+            'background_processing' => true,
+            'batch_size' => 5,
+            'batch_delay' => 5,
+            'task_timeout' => 120,
+            'queries_per_minute' => 120,
+            'dry_run_enabled' => true,
+            'fallback_og_image' => '',
             'default_meta_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_short_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_full_description' => 'أفضل منتجات الفيب وأكياس النيكوتين في الكويت. نوفر لك تشكيلة واسعة من أجهزة الفيب، بودات، نكهات، وأظرف نيكوتين أصلية 100%. تمتع بتجربة تدخين الكتروني آمنة، سهلة الاستخدام، وبأسعار تنافسية مع خدمة توصيل سريعة ومجانية داخل الكويت. منتجاتنا تناسب المبتدئين والمحترفين، وتشمل أشهر العلامات التجارية في مجال الفيب. اختر الآن البديل العصري للتدخين التقليدي واستمتع بجودة عالية وتجربة مختلفة.',
@@ -256,6 +266,115 @@ class Salah_SEO_Helpers {
         }
 
         return $settings;
+    }
+
+    /**
+     * Retrieve the persistent queue state.
+     *
+     * @return array
+     */
+    public static function get_task_queue() {
+        $queue = get_option('salah_seo_task_queue', array());
+
+        if (!is_array($queue)) {
+            $queue = array();
+        }
+
+        return $queue;
+    }
+
+    /**
+     * Persist the queue back to the database.
+     *
+     * @param array $queue Queue payload.
+     * @return void
+     */
+    public static function update_task_queue($queue) {
+        update_option('salah_seo_task_queue', array_values($queue), false);
+    }
+
+    /**
+     * Get processing state metadata.
+     *
+     * @return array
+     */
+    public static function get_processing_state() {
+        $state = get_option('salah_seo_task_state', array());
+
+        if (!is_array($state)) {
+            $state = array();
+        }
+
+        return $state;
+    }
+
+    /**
+     * Update processing state metadata.
+     *
+     * @param array $state State payload.
+     * @return void
+     */
+    public static function update_processing_state($state) {
+        update_option('salah_seo_task_state', $state, false);
+    }
+
+    /**
+     * Attempt to acquire a transient-based lock to avoid duplicate work.
+     *
+     * @param string $key Lock key.
+     * @param int    $ttl Lock lifetime in seconds.
+     * @return bool True if lock acquired.
+     */
+    public static function acquire_lock($key, $ttl = 60) {
+        $lock_key = 'salah_seo_lock_' . md5($key);
+
+        if (false !== get_transient($lock_key)) {
+            return false;
+        }
+
+        set_transient($lock_key, 1, $ttl);
+
+        return true;
+    }
+
+    /**
+     * Release an existing lock.
+     *
+     * @param string $key Lock key.
+     * @return void
+     */
+    public static function release_lock($key) {
+        delete_transient('salah_seo_lock_' . md5($key));
+    }
+
+    /**
+     * Get fallback image URL used for social sharing metadata.
+     *
+     * @return string
+     */
+    public static function get_fallback_image() {
+        $settings = self::get_plugin_settings();
+
+        if (!empty($settings['fallback_og_image'])) {
+            return esc_url_raw($settings['fallback_og_image']);
+        }
+
+        $site_icon = get_site_icon_url();
+
+        if (!empty($site_icon)) {
+            return esc_url_raw($site_icon);
+        }
+
+        $custom_logo = get_theme_mod('custom_logo');
+
+        if ($custom_logo) {
+            $image = wp_get_attachment_image_src($custom_logo, 'full');
+            if (!empty($image[0])) {
+                return esc_url_raw($image[0]);
+            }
+        }
+
+        return '';
     }
 
     /**
@@ -339,7 +458,7 @@ class Salah_SEO_Helpers {
             // Enforce a single link per target URL regardless of keyword matches.
             $max_repeats = 1;
 
-            $nodes = $xpath->query("//text()[not(ancestor::a) and not(ancestor::script) and not(ancestor::style) and not(ancestor::code) and normalize-space() != '']");
+            $nodes = $xpath->query("//text()[not(ancestor::a) and not(ancestor::script) and not(ancestor::style) and not(ancestor::code) and not(ancestor::h1) and not(ancestor::h2) and not(ancestor::h3) and not(ancestor::h4) and not(ancestor::h5) and not(ancestor::h6) and not(ancestor::button) and not(ancestor::nav) and not(ancestor::figcaption) and not(ancestor::*[contains(concat(' ' , normalize-space(@class) , ' '), ' wp-block-buttons ')]) and not(ancestor::ul[contains(concat(' ' , normalize-space(@class) , ' '), ' toc ')]) and not(ancestor::ol[contains(concat(' ' , normalize-space(@class) , ' '), ' toc ')]) and normalize-space() != '']");
 
             foreach ($nodes as $node) {
                 if ($count >= $max_repeats) {
@@ -385,6 +504,51 @@ class Salah_SEO_Helpers {
         $new_html = $dom->saveHTML();
 
         return preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $new_html);
+    }
+
+    /**
+     * Build internal link suggestions without altering content.
+     *
+     * @param int $post_id Post ID.
+     * @return array
+     */
+    public static function generate_internal_link_suggestions($post_id) {
+        $post = get_post($post_id);
+        if (!$post || empty($post->post_content)) {
+            return array();
+        }
+
+        $settings = self::get_plugin_settings();
+        $rules = isset($settings['internal_link_rules']) ? self::format_internal_link_rules($settings['internal_link_rules']) : array();
+
+        if (empty($rules)) {
+            return array();
+        }
+
+        $content = $post->post_content;
+        $suggestions = array();
+
+        foreach ($rules as $rule) {
+            if (empty($rule['keyword']) || empty($rule['url'])) {
+                continue;
+            }
+
+            if (false !== stripos($content, $rule['url'])) {
+                continue;
+            }
+
+            if (false === stripos($content, $rule['keyword'])) {
+                continue;
+            }
+
+            $suggestions[] = array(
+                'keyword' => $rule['keyword'],
+                'url' => $rule['url'],
+                'potential_matches' => (int) preg_match_all('/' . preg_quote($rule['keyword'], '/') . '/iu', $content, $dummy),
+            );
+        }
+
+        return $suggestions;
     }
 
     /**

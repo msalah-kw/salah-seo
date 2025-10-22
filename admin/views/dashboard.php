@@ -15,6 +15,16 @@ $feature_toggles = array(
     'enable_image_optimization' => __('تحسين بيانات الصور المرفقة', 'salah-seo'),
     'enable_internal_linking' => __('تطبيق قواعد الربط الداخلي', 'salah-seo'),
     'enable_canonical_fix' => __('إصلاح الروابط القانونية (Canonical)', 'salah-seo'),
+    'enable_redirect_manager' => __('تتبع التغييرات وإنشاء تحويلات 301 تلقائياً', 'salah-seo'),
+    'enable_schema_markup' => __('تضمين مخطط البيانات (Schema)', 'salah-seo'),
+    'enable_social_meta' => __('توليد بيانات OpenGraph و Twitter Cards', 'salah-seo'),
+);
+
+$performance_defaults = array(
+    'batch_size' => !empty($settings['batch_size']) ? (int) $settings['batch_size'] : 5,
+    'batch_delay' => !empty($settings['batch_delay']) ? (int) $settings['batch_delay'] : 5,
+    'task_timeout' => !empty($settings['task_timeout']) ? (int) $settings['task_timeout'] : 120,
+    'queries_per_minute' => !empty($settings['queries_per_minute']) ? (int) $settings['queries_per_minute'] : 120,
 );
 
 $default_texts = array(
@@ -168,6 +178,66 @@ $links_nonce = wp_create_nonce('salah_seo_links_nonce');
             </div>
         </section>
 
+        <section class="bg-white rounded-2xl shadow-sm border border-slate-200">
+            <header class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                    <h2 class="text-xl font-semibold text-slate-900"><?php esc_html_e('الأداء والمهام الخلفية', 'salah-seo'); ?></h2>
+                    <p class="text-sm text-slate-500 mt-1"><?php esc_html_e('تحكم في حجم الدفعات، الفواصل الزمنية، ومنع التعارضات أثناء التنفيذ.', 'salah-seo'); ?></p>
+                </div>
+                <span class="inline-flex items-center gap-2 text-xs font-semibold text-emerald-600 bg-emerald-100 px-3 py-1 rounded-full">
+                    <span class="dashicons dashicons-clock"></span>
+                    <?php esc_html_e('WP-Cron & WP-CLI جاهز', 'salah-seo'); ?>
+                </span>
+            </header>
+            <div class="p-6 space-y-6">
+                <div class="grid gap-4 sm:grid-cols-2">
+                    <label class="flex items-start gap-3 p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition cursor-pointer bg-slate-50">
+                        <input type="checkbox" name="<?php echo esc_attr($this->option_name . '[background_processing]'); ?>" value="1" class="mt-1 h-5 w-5 text-emerald-600 focus:ring-emerald-500" <?php checked(true, !empty($settings['background_processing']), true); ?> />
+                        <div class="space-y-1">
+                            <span class="block text-base font-semibold text-slate-900"><?php esc_html_e('تشغيل التحسينات في الخلفية', 'salah-seo'); ?></span>
+                            <span class="block text-xs text-slate-500"><?php esc_html_e('يستخدم نظام طوابير يعتمد على WP-Cron مع استئناف تلقائي.', 'salah-seo'); ?></span>
+                        </div>
+                    </label>
+                    <label class="flex items-start gap-3 p-4 rounded-xl border border-slate-200 hover:border-slate-300 transition cursor-pointer bg-slate-50">
+                        <input type="checkbox" name="<?php echo esc_attr($this->option_name . '[dry_run_enabled]'); ?>" value="1" class="mt-1 h-5 w-5 text-emerald-600 focus:ring-emerald-500" <?php checked(true, !empty($settings['dry_run_enabled']), true); ?> />
+                        <div class="space-y-1">
+                            <span class="block text-base font-semibold text-slate-900"><?php esc_html_e('تفعيل وضع التجربة (Dry-Run)', 'salah-seo'); ?></span>
+                            <span class="block text-xs text-slate-500"><?php esc_html_e('اعرض التغييرات المتوقعة قبل حفظها فعلياً.', 'salah-seo'); ?></span>
+                        </div>
+                    </label>
+                </div>
+
+                <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2" for="batch_size"><?php esc_html_e('حجم الدفعة', 'salah-seo'); ?></label>
+                        <input type="number" min="1" id="batch_size" name="<?php echo esc_attr($this->option_name . '[batch_size]'); ?>" value="<?php echo esc_attr($performance_defaults['batch_size']); ?>" class="w-full rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 px-4 py-2 text-sm text-slate-700" />
+                        <p class="text-xs text-slate-500 mt-1"><?php esc_html_e('عدد العناصر التي تُعالج في كل دفعة (افتراضي 5).', 'salah-seo'); ?></p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2" for="batch_delay"><?php esc_html_e('الفاصل بين الدُفعات (ثواني)', 'salah-seo'); ?></label>
+                        <input type="number" min="0" id="batch_delay" name="<?php echo esc_attr($this->option_name . '[batch_delay]'); ?>" value="<?php echo esc_attr($performance_defaults['batch_delay']); ?>" class="w-full rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 px-4 py-2 text-sm text-slate-700" />
+                        <p class="text-xs text-slate-500 mt-1"><?php esc_html_e('مهلة صغيرة بين الدُفعات لتخفيف الضغط على الخادم.', 'salah-seo'); ?></p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2" for="task_timeout"><?php esc_html_e('مهلة التنفيذ (ثواني)', 'salah-seo'); ?></label>
+                        <input type="number" min="30" id="task_timeout" name="<?php echo esc_attr($this->option_name . '[task_timeout]'); ?>" value="<?php echo esc_attr($performance_defaults['task_timeout']); ?>" class="w-full rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 px-4 py-2 text-sm text-slate-700" />
+                        <p class="text-xs text-slate-500 mt-1"><?php esc_html_e('الحد الأقصى لمدة كل دفعة قبل إعادة الجدولة.', 'salah-seo'); ?></p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2" for="queries_per_minute"><?php esc_html_e('الاستعلامات في الدقيقة', 'salah-seo'); ?></label>
+                        <input type="number" min="1" id="queries_per_minute" name="<?php echo esc_attr($this->option_name . '[queries_per_minute]'); ?>" value="<?php echo esc_attr($performance_defaults['queries_per_minute']); ?>" class="w-full rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 px-4 py-2 text-sm text-slate-700" />
+                        <p class="text-xs text-slate-500 mt-1"><?php esc_html_e('تقييد عمليات قاعدة البيانات في الدقيقة لحماية الموقع.', 'salah-seo'); ?></p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2" for="fallback_og_image"><?php esc_html_e('صورة احتياطية لوسوم OpenGraph', 'salah-seo'); ?></label>
+                    <input type="url" id="fallback_og_image" name="<?php echo esc_attr($this->option_name . '[fallback_og_image]'); ?>" value="<?php echo !empty($settings['fallback_og_image']) ? esc_attr($settings['fallback_og_image']) : ''; ?>" class="w-full rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 px-4 py-2 text-sm text-slate-700" placeholder="https://example.com/default-og.jpg" />
+                    <p class="text-xs text-slate-500 mt-1"><?php esc_html_e('سيتم استخدام هذه الصورة عند غياب صورة للمنتج أو المقال.', 'salah-seo'); ?></p>
+                </div>
+            </div>
+        </section>
+
         <div class="flex justify-end">
             <?php submit_button(__('حفظ الإعدادات', 'salah-seo'), 'primary', 'submit', false, array('class' => 'px-6 py-2 text-base font-semibold rounded-full bg-emerald-600 hover:bg-emerald-700 transition')); ?>
         </div>
@@ -190,6 +260,10 @@ $links_nonce = wp_create_nonce('salah_seo_links_nonce');
                 <button type="button" id="salah-seo-bulk-start" class="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-slate-900 hover:bg-black text-white text-sm font-semibold transition">
                     <span class="dashicons dashicons-performance"></span>
                     <?php esc_html_e('بدء التحسين الجماعي', 'salah-seo'); ?>
+                </button>
+                <button type="button" id="salah-seo-bulk-dry-run" class="inline-flex items-center gap-2 px-5 py-3 rounded-full bg-amber-100 text-amber-700 hover:bg-amber-200 text-sm font-semibold transition">
+                    <span class="dashicons dashicons-visibility"></span>
+                    <?php esc_html_e('معاينة بدون حفظ (Dry-Run)', 'salah-seo'); ?>
                 </button>
                 <button type="button" id="salah-seo-bulk-stop" class="hidden inline-flex items-center gap-2 px-5 py-3 rounded-full bg-red-100 text-red-600 hover:bg-red-600 hover:text-white text-sm font-semibold transition">
                     <span class="dashicons dashicons-no"></span>

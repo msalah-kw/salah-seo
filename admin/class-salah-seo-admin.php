@@ -74,7 +74,12 @@ class Salah_SEO_Admin {
             'enable_product_tags',
             'enable_image_optimization',
             'enable_internal_linking',
-            'enable_canonical_fix'
+            'enable_canonical_fix',
+            'enable_redirect_manager',
+            'enable_schema_markup',
+            'enable_social_meta',
+            'background_processing',
+            'dry_run_enabled'
         );
 
         foreach ($checkboxes as $checkbox) {
@@ -84,6 +89,12 @@ class Salah_SEO_Admin {
         $sanitized['default_meta_description'] = isset($input['default_meta_description']) ? sanitize_textarea_field($input['default_meta_description']) : '';
         $sanitized['default_short_description'] = isset($input['default_short_description']) ? sanitize_textarea_field($input['default_short_description']) : '';
         $sanitized['default_full_description'] = isset($input['default_full_description']) ? sanitize_textarea_field($input['default_full_description']) : '';
+
+        $sanitized['batch_size'] = isset($input['batch_size']) ? max(1, absint($input['batch_size'])) : 5;
+        $sanitized['batch_delay'] = isset($input['batch_delay']) ? max(0, absint($input['batch_delay'])) : 5;
+        $sanitized['task_timeout'] = isset($input['task_timeout']) ? max(30, absint($input['task_timeout'])) : 120;
+        $sanitized['queries_per_minute'] = isset($input['queries_per_minute']) ? max(1, absint($input['queries_per_minute'])) : 120;
+        $sanitized['fallback_og_image'] = isset($input['fallback_og_image']) ? esc_url_raw($input['fallback_og_image']) : '';
 
         $sanitized['internal_link_rules'] = array();
         if (!empty($input['internal_link_rules']) && is_array($input['internal_link_rules'])) {
@@ -385,6 +396,8 @@ class Salah_SEO_Admin {
             wp_die(__('Insufficient permissions', 'salah-seo'));
         }
         
+        $dry_run = !empty($_POST['dry_run']);
+
         // Get all published products
         $products = get_posts(array(
             'post_type' => 'product',
@@ -392,7 +405,7 @@ class Salah_SEO_Admin {
             'numberposts' => -1,
             'fields' => 'ids'
         ));
-        
+
         // Store product IDs in transient for processing
         set_transient('salah_seo_bulk_products', $products, HOUR_IN_SECONDS);
         set_transient('salah_seo_bulk_progress', array(
@@ -401,15 +414,17 @@ class Salah_SEO_Admin {
             'optimized' => 0,
             'skipped' => 0,
             'errors' => 0,
-            'status' => 'running'
+            'status' => 'running',
+            'dry_run' => $dry_run,
         ), HOUR_IN_SECONDS);
-        
+
         wp_send_json_success(array(
             'total' => count($products),
+            'dry_run' => $dry_run,
             'message' => sprintf(__('تم العثور على %d منتج للمعالجة', 'salah-seo'), count($products))
         ));
     }
-    
+
     /**
      * AJAX handler for bulk operations processing
      */
@@ -423,28 +438,30 @@ class Salah_SEO_Admin {
             wp_die(__('Insufficient permissions', 'salah-seo'));
         }
         
-        $batch_size = 3; // Process 3 products per batch (reduced for stability)
+        $settings = Salah_SEO_Helpers::get_plugin_settings();
+        $batch_size = max(1, (int) $settings['batch_size']);
         $products = get_transient('salah_seo_bulk_products');
         $progress = get_transient('salah_seo_bulk_progress');
-        
+
         if (!$products || !$progress) {
             wp_send_json_error(array('message' => __('انتهت صلاحية العملية', 'salah-seo')));
         }
-        
+
         if ($progress['status'] !== 'running') {
             wp_send_json_error(array('message' => __('تم إيقاف العملية', 'salah-seo')));
         }
-        
+
+        $dry_run = !empty($progress['dry_run']);
         $start_index = $progress['processed'];
         $batch_products = array_slice($products, $start_index, $batch_size);
-        
+
         $batch_results = array();
         $optimized_count = 0;
         $skipped_count = 0;
         $error_count = 0;
         
         if (class_exists('Salah_SEO_Core')) {
-            $core = new Salah_SEO_Core();
+            $core = Salah_SEO_Core::instance();
             
             foreach ($batch_products as $product_id) {
                 $post = get_post($product_id);
@@ -459,33 +476,23 @@ class Salah_SEO_Admin {
                     continue;
                 }
                 
-                // Clear any existing transients
-                delete_transient('salah_seo_success_notice');
-                delete_transient('salah_seo_optimization_details');
-                
-                // Run optimizations
-                ob_start();
-                $core->run_optimizations($product_id, $post);
-                ob_end_clean();
-                
-                // Check if optimizations were applied
-                if (get_transient('salah_seo_success_notice')) {
-                    delete_transient('salah_seo_success_notice');
-                    
-                    // Get optimization details
-                    $optimization_details = get_transient('salah_seo_optimization_details');
-                    $applied_optimizations = isset($optimization_details[$product_id]) ? $optimization_details[$product_id] : array();
-                    delete_transient('salah_seo_optimization_details');
-                    
+                $result = $core->optimize_post($product_id, array(
+                    'dry_run' => $dry_run,
+                    'source' => 'bulk',
+                ));
+
+                $changes = isset($result['changes']) ? $result['changes'] : array();
+                $change_labels = wp_list_pluck($changes, 'label');
+
+                if (!empty($changes)) {
                     $optimized_count++;
-                    $details_text = !empty($applied_optimizations) ? implode(', ', $applied_optimizations) : 'تحسينات عامة';
-                    
                     $batch_results[] = array(
                         'id' => $product_id,
                         'title' => get_the_title($product_id),
-                        'status' => 'optimized',
-                        'message' => 'تم التحسين',
-                        'details' => $details_text
+                        'status' => $dry_run ? 'preview' : 'optimized',
+                        'message' => $dry_run ? __('تم إنشاء معاينة بدون حفظ.', 'salah-seo') : __('تم تطبيق التحسينات بنجاح.', 'salah-seo'),
+                        'details' => !empty($change_labels) ? implode(', ', $change_labels) : __('تحسينات عامة', 'salah-seo'),
+                        'changes' => $changes,
                     );
                 } else {
                     $skipped_count++;
@@ -493,8 +500,8 @@ class Salah_SEO_Admin {
                         'id' => $product_id,
                         'title' => get_the_title($product_id),
                         'status' => 'skipped',
-                        'message' => 'لا يحتاج تحسين',
-                        'details' => 'جميع الحقول محدثة بالفعل'
+                        'message' => __('لا يحتاج تحسين، جميع الحقول محدثة.', 'salah-seo'),
+                        'details' => __('تم تخطي المنتج لأنه محدث.', 'salah-seo'),
                     );
                 }
             }
@@ -519,7 +526,8 @@ class Salah_SEO_Admin {
             'progress' => $progress,
             'batch_results' => $batch_results,
             'is_complete' => $is_complete,
-            'percentage' => round(($progress['processed'] / $progress['total']) * 100, 1)
+            'percentage' => round(($progress['processed'] / $progress['total']) * 100, 1),
+            'dry_run' => $dry_run,
         ));
     }
     
@@ -543,26 +551,33 @@ class Salah_SEO_Admin {
             wp_send_json_error(array('message' => __('منتج غير صالح', 'salah-seo')));
         }
         
+        $dry_run = !empty($_POST['dry_run']);
+
         // Get core instance and run optimizations
         if (class_exists('Salah_SEO_Core')) {
-            $core = new Salah_SEO_Core();
-            
-            // Temporarily capture optimization results
-            ob_start();
-            $core->run_optimizations($post_id, $post);
-            ob_end_clean();
-            
-            // Check if optimizations were applied by looking for the transient
-            if (get_transient('salah_seo_success_notice')) {
-                delete_transient('salah_seo_success_notice'); // Clean up
+            $core = Salah_SEO_Core::instance();
+
+            $result = $core->optimize_post($post_id, array(
+                'dry_run' => $dry_run,
+                'source' => 'single',
+            ));
+
+            $changes = isset($result['changes']) ? $result['changes'] : array();
+
+            if (!empty($changes)) {
+                $change_labels = wp_list_pluck($changes, 'label');
                 wp_send_json_success(array(
-                    'message' => __('تم تطبيق تحسينات SEO بنجاح! تم تحديث الحقول الفارغة فقط.', 'salah-seo')
-                ));
-            } else {
-                wp_send_json_success(array(
-                    'message' => __('لا توجد حقول فارغة للتحسين. جميع بيانات SEO محدثة بالفعل.', 'salah-seo')
+                    'message' => $dry_run ? __('تم إنشاء معاينة للتحسينات بدون حفظ.', 'salah-seo') : __('تم تطبيق تحسينات SEO بنجاح! تم تحديث الحقول الفارغة فقط.', 'salah-seo'),
+                    'changes' => $changes,
+                    'summary' => !empty($change_labels) ? implode(', ', $change_labels) : '',
+                    'dry_run' => $dry_run,
                 ));
             }
+
+            wp_send_json_success(array(
+                'message' => __('لا توجد حقول فارغة للتحسين. جميع بيانات SEO محدثة بالفعل.', 'salah-seo'),
+                'dry_run' => $dry_run,
+            ));
         } else {
             wp_send_json_error(array('message' => __('خطأ في تحميل نواة الإضافة', 'salah-seo')));
         }
