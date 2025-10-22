@@ -88,26 +88,36 @@ class Salah_SEO_Scheduler {
      * @return void
      */
     public static function process_queue() {
-        if (!Salah_SEO_Helpers::acquire_lock(self::CRON_HOOK, 30)) {
-            return;
-        }
-
         $settings = Salah_SEO_Helpers::get_plugin_settings();
-        $queue = Salah_SEO_Helpers::get_task_queue();
+        $batch_size = !empty($settings['batch_size']) ? (int) $settings['batch_size'] : 5;
+        $task_timeout = !empty($settings['task_timeout']) ? (int) $settings['task_timeout'] : 120;
+        $per_item_budget = !empty($settings['per_item_time_budget']) ? (int) $settings['per_item_time_budget'] : 10;
+        $lock_ttl = max($task_timeout, $batch_size * max(1, $per_item_budget));
 
-        if (empty($queue)) {
-            Salah_SEO_Helpers::release_lock(self::CRON_HOOK);
+        $lock_token = Salah_SEO_Helpers::acquire_lock(self::CRON_HOOK, $lock_ttl);
+
+        if (!$lock_token) {
             return;
         }
 
-        $batch_size = !empty($settings['batch_size']) ? (int) $settings['batch_size'] : 5;
-        $delay = !empty($settings['batch_delay']) ? (int) $settings['batch_delay'] : 5;
-        $queries_per_minute = !empty($settings['queries_per_minute']) ? (int) $settings['queries_per_minute'] : 120;
-        $sleep_between = $queries_per_minute > 0 ? max(0, floor(60 / max(1, $queries_per_minute))) : 0;
-        $task_timeout = !empty($settings['task_timeout']) ? (int) $settings['task_timeout'] : 120;
+        Salah_SEO_Helpers::register_lock_shutdown(self::CRON_HOOK, $lock_token);
+        $queue = Salah_SEO_Helpers::get_task_queue();
 
         $state = Salah_SEO_Helpers::get_processing_state();
         $state['last_run'] = current_time('timestamp');
+
+        if (empty($queue)) {
+            $state['in_progress'] = false;
+            $state['last_processed'] = 0;
+            Salah_SEO_Helpers::update_processing_state($state);
+            Salah_SEO_Helpers::release_lock(self::CRON_HOOK, $lock_token);
+            return;
+        }
+
+        $delay = !empty($settings['batch_delay']) ? (int) $settings['batch_delay'] : 5;
+        $queries_per_minute = !empty($settings['queries_per_minute']) ? (int) $settings['queries_per_minute'] : 120;
+        $sleep_between = $queries_per_minute > 0 ? max(0, floor(60 / max(1, $queries_per_minute))) : 0;
+
         $state['in_progress'] = true;
         Salah_SEO_Helpers::update_processing_state($state);
 
@@ -115,39 +125,47 @@ class Salah_SEO_Scheduler {
         $core = Salah_SEO_Core::instance();
         $start_time = time();
 
-        while (!empty($queue) && $processed < $batch_size) {
-            $task = array_shift($queue);
-            $post_id = isset($task['post_id']) ? absint($task['post_id']) : 0;
+        try {
+            while (!empty($queue) && $processed < $batch_size) {
+                $task = array_shift($queue);
+                $post_id = isset($task['post_id']) ? absint($task['post_id']) : 0;
 
-            if ($post_id) {
-                try {
-                    $core->optimize_post($post_id, array('source' => 'queue'));
-                } catch (Exception $e) {
-                    Salah_SEO_Helpers::log('Queue processing failed for post ' . $post_id . ': ' . $e->getMessage(), 'error');
+                if ($post_id) {
+                    try {
+                        $core->optimize_post($post_id, array('source' => 'queue'));
+                    } catch (Exception $e) {
+                        Salah_SEO_Helpers::log('Queue processing failed for post ' . $post_id . ': ' . $e->getMessage(), 'error');
+                    }
+                }
+
+                $processed++;
+
+                if (!Salah_SEO_Helpers::refresh_lock(self::CRON_HOOK, $lock_token, $lock_ttl)) {
+                    Salah_SEO_Helpers::log('Queue heartbeat refresh failed; lock may have been stolen.', 'warning');
+                }
+
+                if ($sleep_between > 0) {
+                    usleep($sleep_between * 1000000);
+                }
+
+                if ($task_timeout > 0 && (time() - $start_time) >= $task_timeout) {
+                    break;
                 }
             }
 
-            $processed++;
+            Salah_SEO_Helpers::update_task_queue($queue);
+            $state['last_processed'] = $processed;
 
-            if ($sleep_between > 0) {
-                usleep($sleep_between * 1000000);
+            if (!empty($queue)) {
+                wp_schedule_single_event(time() + max(1, $delay), self::CRON_HOOK);
             }
-
-            if ($task_timeout > 0 && (time() - $start_time) >= $task_timeout) {
-                break;
+        } finally {
+            $state['in_progress'] = false;
+            if (!isset($state['last_processed'])) {
+                $state['last_processed'] = $processed;
             }
-        }
-
-        Salah_SEO_Helpers::update_task_queue($queue);
-
-        $state['in_progress'] = false;
-        $state['last_processed'] = $processed;
-        Salah_SEO_Helpers::update_processing_state($state);
-
-        Salah_SEO_Helpers::release_lock(self::CRON_HOOK);
-
-        if (!empty($queue)) {
-            wp_schedule_single_event(time() + max(1, $delay), self::CRON_HOOK);
+            Salah_SEO_Helpers::update_processing_state($state);
+            Salah_SEO_Helpers::release_lock(self::CRON_HOOK, $lock_token);
         }
     }
 }

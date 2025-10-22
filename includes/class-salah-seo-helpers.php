@@ -243,6 +243,7 @@ class Salah_SEO_Helpers {
             'batch_delay' => 5,
             'task_timeout' => 120,
             'queries_per_minute' => 120,
+            'per_item_time_budget' => 10,
             'dry_run_enabled' => true,
             'fallback_og_image' => '',
             'default_meta_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
@@ -326,13 +327,46 @@ class Salah_SEO_Helpers {
      * @return bool True if lock acquired.
      */
     public static function acquire_lock($key, $ttl = 60) {
-        $lock_key = 'salah_seo_lock_' . md5($key);
+        $lock_key = self::get_lock_key($key);
+        $existing = get_transient($lock_key);
 
-        if (false !== get_transient($lock_key)) {
+        if (is_array($existing) && !self::is_lock_expired($existing)) {
             return false;
         }
 
-        set_transient($lock_key, 1, $ttl);
+        $token = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : uniqid('salah_seo_', true);
+        $payload = array(
+            'token'      => $token,
+            'expires_at' => time() + $ttl,
+        );
+
+        set_transient($lock_key, $payload, $ttl);
+
+        return $token;
+    }
+
+    /**
+     * Refresh an existing lock heartbeat.
+     *
+     * @param string $key   Lock key.
+     * @param string $token Lock token returned on acquire.
+     * @param int    $ttl   Lock lifetime in seconds.
+     * @return bool True if lock refreshed.
+     */
+    public static function refresh_lock($key, $token, $ttl) {
+        $lock_key = self::get_lock_key($key);
+        $existing = get_transient($lock_key);
+
+        if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
+            return false;
+        }
+
+        $payload = array(
+            'token'      => $token,
+            'expires_at' => time() + $ttl,
+        );
+
+        set_transient($lock_key, $payload, $ttl);
 
         return true;
     }
@@ -340,11 +374,58 @@ class Salah_SEO_Helpers {
     /**
      * Release an existing lock.
      *
-     * @param string $key Lock key.
+     * @param string      $key   Lock key.
+     * @param string|null $token Expected token. Null to force release.
      * @return void
      */
-    public static function release_lock($key) {
-        delete_transient('salah_seo_lock_' . md5($key));
+    public static function release_lock($key, $token = null) {
+        $lock_key = self::get_lock_key($key);
+
+        if (null === $token) {
+            delete_transient($lock_key);
+            return;
+        }
+
+        $existing = get_transient($lock_key);
+
+        if (!is_array($existing) || empty($existing['token']) || $existing['token'] !== $token) {
+            return;
+        }
+
+        delete_transient($lock_key);
+    }
+
+    /**
+     * Register a shutdown handler to safely release a lock on fatal termination.
+     *
+     * @param string $key   Lock key.
+     * @param string $token Lock token.
+     * @return void
+     */
+    public static function register_lock_shutdown($key, $token) {
+        register_shutdown_function(array(__CLASS__, 'release_lock'), $key, $token);
+    }
+
+    /**
+     * Determine if an existing lock payload has expired.
+     *
+     * @param array $payload Lock payload.
+     * @return bool
+     */
+    private static function is_lock_expired($payload) {
+        $expires_at = isset($payload['expires_at']) ? (int) $payload['expires_at'] : 0;
+
+        return $expires_at > 0 && $expires_at < time();
+    }
+
+    /**
+     * Get the transient key for a lock identifier.
+     *
+     * @param string $key Raw lock key.
+     * @return string
+     */
+    private static function get_lock_key($key) {
+        return 'salah_seo_lock_' . md5($key);
     }
 
     /**
@@ -439,8 +520,21 @@ class Salah_SEO_Helpers {
             return $content;
         }
 
+        $placeholders = array();
+        $protected_content = self::protect_content_regions($content, $placeholders);
+
         $dom = new DOMDocument();
-        @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        $libxml_previous_state = libxml_use_internal_errors(true);
+
+        if (!$dom->loadHTML('<?xml encoding="utf-8" ?>' . $protected_content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
+            libxml_clear_errors();
+            libxml_use_internal_errors($libxml_previous_state);
+
+            return $content;
+        }
+
+        libxml_clear_errors();
+        libxml_use_internal_errors($libxml_previous_state);
 
         $xpath = new DOMXPath($dom);
         $used_urls = array();
@@ -502,8 +596,186 @@ class Salah_SEO_Helpers {
         }
 
         $new_html = $dom->saveHTML();
+        $new_html = preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $new_html);
 
-        return preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $new_html);
+        return self::restore_protected_regions($new_html, $placeholders);
+    }
+
+    /**
+     * Replace shortcode and protected block regions with placeholders.
+     *
+     * @param string $content Original content.
+     * @param array  $placeholders Reference placeholder map.
+     * @return string
+     */
+    private static function protect_content_regions($content, array &$placeholders) {
+        $counter = 0;
+
+        $content = self::protect_shortcodes($content, $placeholders, $counter);
+        $content = self::protect_block_regions($content, $placeholders, $counter);
+
+        return $content;
+    }
+
+    /**
+     * Restore placeholder regions back to their original markup.
+     *
+     * @param string $content Filtered content.
+     * @param array  $placeholders Placeholder map.
+     * @return string
+     */
+    private static function restore_protected_regions($content, array $placeholders) {
+        if (empty($placeholders)) {
+            return $content;
+        }
+
+        foreach ($placeholders as $token => $original) {
+            $content = str_replace($token, $original, $content);
+        }
+
+        return $content;
+    }
+
+    /**
+     * Protect inline shortcodes with placeholders.
+     *
+     * @param string $content Content.
+     * @param array  $placeholders Placeholder map.
+     * @param int    $counter Placeholder index.
+     * @return string
+     */
+    private static function protect_shortcodes($content, array &$placeholders, &$counter) {
+        if (function_exists('get_shortcode_regex')) {
+            $regex = '/' . get_shortcode_regex() . '/s';
+        } else {
+            $regex = '/\[([a-zA-Z0-9_-]+)(?:[^\]]*)\](?:.*?\[\/\1\])?/s';
+        }
+
+        return preg_replace_callback(
+            $regex,
+            function ($match) use (&$placeholders, &$counter) {
+                $raw = $match[0];
+                $token = Salah_SEO_Helpers::generate_placeholder_token(++$counter);
+                $placeholders[$token] = $raw;
+
+                return $token;
+            },
+            $content
+        );
+    }
+
+    /**
+     * Protect block regions that should not be modified.
+     *
+     * @param string $content Content.
+     * @param array  $placeholders Placeholder map.
+     * @param int    $counter Placeholder index.
+     * @return string
+     */
+    private static function protect_block_regions($content, array &$placeholders, &$counter) {
+        $has_blocks = function_exists('has_blocks') ? has_blocks($content) : (false !== strpos($content, '<!-- wp:'));
+
+        if (!function_exists('parse_blocks') || !$has_blocks) {
+            return self::protect_block_comments($content, $placeholders, $counter);
+        }
+
+        $blocks = parse_blocks($content);
+        $protected = self::collect_protected_blocks($blocks);
+
+        foreach ($protected as $original) {
+            $token = self::generate_placeholder_token(++$counter);
+            $placeholders[$token] = $original;
+            $content = str_replace($original, $token, $content);
+        }
+
+        return $content;
+    }
+
+    /**
+     * Fallback block protection when block parser is unavailable.
+     *
+     * @param string $content Content string.
+     * @param array  $placeholders Placeholder map.
+     * @param int    $counter Placeholder counter.
+     * @return string
+     */
+    private static function protect_block_comments($content, array &$placeholders, &$counter) {
+        $pattern = '/<!--\s+wp:([^\s]+)[^>]*-->.*?<!--\s+\/wp:\1\s+-->/is';
+
+        $protected_blocks = array('core/shortcode', 'core/html', 'core/button', 'core/buttons', 'core/navigation', 'core/navigation-link', 'core/code');
+
+        return preg_replace_callback(
+            $pattern,
+            function ($match) use (&$placeholders, &$counter, $protected_blocks) {
+                $name = isset($match[1]) ? trim($match[1]) : '';
+
+                if (!in_array($name, $protected_blocks, true)) {
+                    return $match[0];
+                }
+
+                $token = Salah_SEO_Helpers::generate_placeholder_token(++$counter);
+                $placeholders[$token] = $match[0];
+
+                return $token;
+            },
+            $content
+        );
+    }
+
+    /**
+     * Gather serialized markup for protected blocks using the block parser.
+     *
+     * @param array $blocks Parsed blocks.
+     * @return array
+     */
+    private static function collect_protected_blocks($blocks) {
+        $protected = array();
+        $protected_types = array(
+            'core/shortcode',
+            'core/html',
+            'core/button',
+            'core/buttons',
+            'core/navigation',
+            'core/navigation-link',
+            'core/code',
+        );
+
+        if (function_exists('apply_filters')) {
+            $protected_types = apply_filters('salah_seo_protected_block_types', $protected_types);
+        }
+
+        foreach ($blocks as $block) {
+            if (!is_array($block)) {
+                continue;
+            }
+
+            $block_name = isset($block['blockName']) ? $block['blockName'] : '';
+
+            if (in_array($block_name, $protected_types, true)) {
+                if (function_exists('serialize_block')) {
+                    $protected[] = serialize_block($block);
+                } elseif (!empty($block['innerHTML'])) {
+                    $protected[] = $block['innerHTML'];
+                }
+                continue;
+            }
+
+            if (!empty($block['innerBlocks'])) {
+                $protected = array_merge($protected, self::collect_protected_blocks($block['innerBlocks']));
+            }
+        }
+
+        return array_unique($protected);
+    }
+
+    /**
+     * Generate a deterministic placeholder token.
+     *
+     * @param int $counter Placeholder index.
+     * @return string
+     */
+    private static function generate_placeholder_token($counter) {
+        return sprintf('%%SALAHSEO_PROTECTED_%d%%', $counter);
     }
 
     /**
