@@ -135,9 +135,9 @@ class Salah_SEO_Core {
      */
     private function populate_focus_keyword($post_id) {
         $current_keyword = get_post_meta($post_id, 'rank_math_focus_keyword', true);
-        
-        // Only populate if empty
-        if (empty($current_keyword)) {
+
+        // Only populate if empty or contains placeholder content
+        if (empty($current_keyword) || $this->is_placeholder_value($current_keyword)) {
             $product_title = get_the_title($post_id);
             if (!empty($product_title)) {
                 update_post_meta($post_id, 'rank_math_focus_keyword', $product_title);
@@ -213,11 +213,20 @@ class Salah_SEO_Core {
      */
     private function populate_product_tags($post_id) {
         $current_tags = wp_get_post_terms($post_id, 'product_tag', array('fields' => 'names'));
-        
-        // Only populate if no tags exist
-        if (empty($current_tags) || is_wp_error($current_tags)) {
+
+        if (is_wp_error($current_tags)) {
+            return false;
+        }
+
+        // Remove placeholder tags like "Auto Draft"
+        $current_tags = array_filter(array_map('trim', $current_tags), function($tag) {
+            return !empty($tag) && !$this->is_placeholder_value($tag);
+        });
+
+        // Only populate if no real tags exist
+        if (empty($current_tags)) {
             $tags_to_add = array();
-            
+
             // Add product name as tag
             $product_title = get_the_title($post_id);
             if (!empty($product_title)) {
@@ -363,5 +372,21 @@ class Salah_SEO_Core {
         }
 
         return isset($this->settings[$key]) ? $this->settings[$key] : '';
+    }
+
+    /**
+     * Determine if a value is an auto-generated placeholder created during draft creation.
+     *
+     * @param string $value Value to inspect.
+     * @return bool
+     */
+    private function is_placeholder_value($value) {
+        if (!is_string($value)) {
+            return false;
+        }
+
+        $normalized = strtolower(trim($value));
+
+        return in_array($normalized, array('auto-draft', 'auto draft'), true);
     }
 }

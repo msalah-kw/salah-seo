@@ -324,11 +324,20 @@ class Salah_SEO_Helpers {
         @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
 
         $xpath = new DOMXPath($dom);
+        $used_urls = array();
+
         foreach ($rules as $rule) {
             $keyword = $rule['keyword'];
             $url = $rule['url'];
             $max_repeats = isset($rule['repeats']) ? max(1, intval($rule['repeats'])) : 1;
             $count = 0;
+
+            if (in_array($url, $used_urls, true)) {
+                continue;
+            }
+
+            // Enforce a single link per target URL regardless of keyword matches.
+            $max_repeats = 1;
 
             $nodes = $xpath->query("//text()[not(ancestor::a) and not(ancestor::script) and not(ancestor::style) and not(ancestor::code) and normalize-space() != '']");
 
@@ -366,6 +375,10 @@ class Salah_SEO_Helpers {
                 if ($count >= $max_repeats) {
                     break;
                 }
+            }
+
+            if ($count > 0) {
+                $used_urls[] = $url;
             }
         }
 
