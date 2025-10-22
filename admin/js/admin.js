@@ -1,480 +1,458 @@
 /**
  * Admin JavaScript for Salah SEO Plugin
  */
+(function($) {
+    $(function() {
+        if (typeof window.salahSeoLabels === 'undefined') {
+            window.salahSeoLabels = {
+                keyword: 'Keyword',
+                url: 'URL',
+                repeats: 'Max repeats',
+                delete: 'Delete rule',
+                emptyState: 'No rules yet. Click "Add rule" to get started.',
+                validationError: 'Please provide a keyword and a valid URL for each rule.',
+                unsaved: 'Unsaved changes',
+                unsavedWarning: 'You have unsaved changes. Are you sure you want to leave?',
+                bulkStart: 'Start bulk optimization',
+                stoppedByUser: 'Operation stopped by user',
+                processingProduct: 'Processing product %1$s of %2$s',
+                totalProducts: 'Total products',
+                optimized: 'Optimized',
+                skipped: 'Skipped',
+                errors: 'Errors',
+                confirmRemove: 'This will remove all internal links. Continue?',
+                noItems: 'No items to process.',
+                optionPrefix: 'salah_seo_settings'
+            };
+        }
 
-jQuery(document).ready(function($) {
-    
-    // Internal Links Management
-    var linkCounter = 0;
-    
-    // Add new internal link row
-    $('#add-internal-link').on('click', function(e) {
-        e.preventDefault();
-        
-        var container = $('#internal-links-container');
-        linkCounter++;
-        
-        var newRow = $('<div class="internal-link-row" data-id="' + linkCounter + '">' +
-            '<input type="text" name="salah_seo_settings[internal_links_new][' + linkCounter + '][keyword]" placeholder="Keyword (e.g., فيب)" class="regular-text keyword-field" />' +
-            '<input type="text" name="salah_seo_settings[internal_links_new][' + linkCounter + '][url]" placeholder="URL (e.g., https://example.com)" class="regular-text url-field" />' +
-            '<button type="button" class="button remove-link">Remove</button>' +
-            '</div>');
-        
-        container.append(newRow);
-        
-        // Focus on the keyword field
-        newRow.find('.keyword-field').focus();
-    });
-    
-    // Remove internal link row
-    $(document).on('click', '.remove-link', function(e) {
-        e.preventDefault();
-        
-        var row = $(this).closest('.internal-link-row');
-        
-        // Add fade out animation
-        row.fadeOut(300, function() {
-            $(this).remove();
-        });
-    });
-    
-    // Validate URLs in real-time
-    $(document).on('blur', '.url-field', function() {
-        var url = $(this).val().trim();
-        var field = $(this);
-        
-        if (url && !isValidUrl(url)) {
-            field.addClass('error');
-            field.attr('title', 'Please enter a valid URL starting with http:// or https://');
-            
-            // Show error message
-            if (!field.next('.url-error').length) {
-                field.after('<span class="url-error" style="color: #dc3232; font-size: 12px; display: block; margin-top: 5px;">Invalid URL format</span>');
-            }
-        } else {
-            field.removeClass('error');
-            field.removeAttr('title');
-            field.next('.url-error').remove();
+        var settingsForm = $('form[action="options.php"]');
+        var linkWrapper = $('#salah-seo-links-wrapper');
+        var currentBulkInterval = null;
+        var bulkProcessing = false;
+        var linkProcessing = false;
+        var processedLinks = 0;
+
+        // ---------------------------
+        // Helpers
+        // ---------------------------
+        function getNextLinkIndex() {
+            var maxIndex = -1;
+            linkWrapper.find('.salah-seo-link-row').each(function() {
+                var value = parseInt($(this).data('index'), 10);
+                if (!isNaN(value)) {
+                    maxIndex = Math.max(maxIndex, value);
+                }
+            });
+            return maxIndex + 1;
         }
-    });
-    
-    // Validate keywords
-    $(document).on('blur', '.keyword-field', function() {
-        var keyword = $(this).val().trim();
-        var field = $(this);
-        
-        if (keyword && keyword.length < 2) {
-            field.addClass('error');
-            field.attr('title', 'Keyword must be at least 2 characters long');
-        } else {
-            field.removeClass('error');
-            field.removeAttr('title');
+
+        function createLinkRow(index) {
+            return $(
+                '<div class="salah-seo-link-row bg-slate-50 border border-slate-200 rounded-xl p-4 grid gap-4 md:grid-cols-[1fr_1fr_auto]" data-index="' + index + '">' +
+                    '<div>' +
+                        '<label class="text-xs font-semibold text-slate-500 mb-1 block">' + window.salahSeoLabels.keyword + '</label>' +
+                        '<input type="text" name="' + window.salahSeoLabels.optionPrefix + '[internal_link_rules][' + index + '][keyword]" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:ring-emerald-500 focus:border-emerald-500 salah-seo-keyword" required />' +
+                    '</div>' +
+                    '<div>' +
+                        '<label class="text-xs font-semibold text-slate-500 mb-1 block">' + window.salahSeoLabels.url + '</label>' +
+                        '<input type="url" name="' + window.salahSeoLabels.optionPrefix + '[internal_link_rules][' + index + '][url]" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:ring-emerald-500 focus:border-emerald-500 salah-seo-url" required />' +
+                    '</div>' +
+                    '<div class="flex gap-3 items-end">' +
+                        '<div class="flex-1">' +
+                            '<label class="text-xs font-semibold text-slate-500 mb-1 block">' + window.salahSeoLabels.repeats + '</label>' +
+                            '<input type="number" min="1" value="1" name="' + window.salahSeoLabels.optionPrefix + '[internal_link_rules][' + index + '][repeats]" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:ring-emerald-500 focus:border-emerald-500" />' +
+                        '</div>' +
+                        '<button type="button" class="salah-seo-remove-link inline-flex items-center justify-center h-10 w-10 rounded-full bg-red-100 text-red-600 hover:bg-red-600 hover:text-white transition" aria-label="' + window.salahSeoLabels.delete + '">' +
+                            '<span class="dashicons dashicons-trash"></span>' +
+                        '</button>' +
+                    '</div>' +
+                '</div>'
+            );
         }
-    });
-    
-    // Form validation before submit
-    $('form').on('submit', function(e) {
-        var hasErrors = false;
-        
-        // Check all URL fields
-        $('.url-field').each(function() {
-            var url = $(this).val().trim();
-            if (url && !isValidUrl(url)) {
-                $(this).addClass('error');
-                hasErrors = true;
+
+        function ensureLinksEmptyState() {
+            if (linkWrapper.find('.salah-seo-link-row').length === 0) {
+                if (!linkWrapper.find('.salah-seo-links-empty').length) {
+                    linkWrapper.append('<div class="salah-seo-links-empty text-sm text-slate-500 bg-slate-50 border border-dashed border-slate-200 rounded-xl p-5 text-center">' + window.salahSeoLabels.emptyState + '</div>');
+                }
+            } else {
+                linkWrapper.find('.salah-seo-links-empty').remove();
             }
-        });
-        
-        // Check all keyword fields
-        $('.keyword-field').each(function() {
-            var keyword = $(this).val().trim();
-            var url = $(this).siblings('.url-field').val().trim();
-            
-            if (url && (!keyword || keyword.length < 2)) {
-                $(this).addClass('error');
-                hasErrors = true;
+        }
+
+        function isValidUrl(value) {
+            try {
+                var url = new URL(value);
+                return url.protocol === 'http:' || url.protocol === 'https:';
+            } catch (e) {
+                return false;
             }
-        });
-        
-        if (hasErrors) {
+        }
+
+        function addLogEntry(container, message, type) {
+            var classes = {
+                success: 'text-emerald-600',
+                error: 'text-red-600',
+                warning: 'text-amber-500',
+                info: 'text-slate-500'
+            };
+            var timestamp = new Date().toLocaleTimeString('ar');
+            var entry = $('<div class="py-1 border-b border-slate-200 last:border-none text-[12px] flex justify-between gap-2"></div>');
+            entry.append('<span class="text-slate-400">[' + timestamp + ']</span>');
+            entry.append('<span class="flex-1 ' + (classes[type] || classes.info) + '">' + message + '</span>');
+            container.append(entry);
+            container.scrollTop(container[0].scrollHeight);
+        }
+
+        function resetBulkUi() {
+            $('#progress-log').empty();
+            $('#salah-seo-bulk-progress').removeClass('hidden');
+            $('.progress-bar').css('width', '0%').text('0%');
+            $('#progress-current').text('0');
+            $('#progress-total').text(salahSeoAjax.totalProducts || 0);
+            $('#progress-status').text(salahSeoAjax.strings.starting);
+            $('#salah-seo-bulk-results').addClass('hidden');
+        }
+
+        function showBulkResults(progress) {
+            var summaryHtml = [
+                '<div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">',
+                    '<div><span class="block text-xs text-slate-500">' + window.salahSeoLabels.totalProducts + '</span><strong class="text-lg text-slate-800">' + progress.total + '</strong></div>',
+                    '<div><span class="block text-xs text-slate-500">' + window.salahSeoLabels.optimized + '</span><strong class="text-lg text-emerald-600">' + progress.optimized + '</strong></div>',
+                    '<div><span class="block text-xs text-slate-500">' + window.salahSeoLabels.skipped + '</span><strong class="text-lg text-slate-600">' + progress.skipped + '</strong></div>',
+                    '<div><span class="block text-xs text-slate-500">' + window.salahSeoLabels.errors + '</span><strong class="text-lg text-red-600">' + progress.errors + '</strong></div>',
+                '</div>'
+            ].join('');
+
+            $('#results-summary').html(summaryHtml);
+            $('#salah-seo-bulk-results').removeClass('hidden');
+        }
+
+        function toggleButtonsDuringLinks(disabled) {
+            $('#salah-seo-links-apply, #salah-seo-links-remove').prop('disabled', disabled);
+        }
+
+        function updateLinksProgress(total) {
+            $('#links-total').text(total);
+            $('#links-current').text(processedLinks);
+            var percentage = total > 0 ? Math.min(100, Math.round((processedLinks / total) * 100)) : 100;
+            $('#salah-seo-links-bar').css('width', percentage + '%').text(percentage + '%');
+        }
+
+        function getNonce(fallbackSelector, localizedValue) {
+            if (localizedValue) {
+                return localizedValue;
+            }
+            var element = $(fallbackSelector);
+            return element.length ? element.val() : '';
+        }
+
+        ensureLinksEmptyState();
+
+        // ---------------------------
+        // Internal link rules actions
+        // ---------------------------
+        $('#salah-seo-add-link').on('click', function(e) {
             e.preventDefault();
-            
-            // Show error message
-            if (!$('.salah-seo-form-error').length) {
-                $('h1').after('<div class="notice notice-error salah-seo-form-error"><p>Please fix the highlighted errors before saving.</p></div>');
-            }
-            
-            // Scroll to first error
-            var firstError = $('.error').first();
-            if (firstError.length) {
-                $('html, body').animate({
-                    scrollTop: firstError.offset().top - 100
-                }, 500);
-            }
-        }
-    });
-    
-    // Auto-save functionality (optional)
-    var autoSaveTimeout;
-    $('input, textarea, select').on('change input', function() {
-        clearTimeout(autoSaveTimeout);
-        
-        // Show unsaved changes indicator
-        if (!$('.unsaved-changes').length) {
-            $('.submit').append('<span class="unsaved-changes" style="color: #dc3232; margin-left: 10px; font-size: 12px;">Unsaved changes</span>');
-        }
-    });
-    
-    // Remove unsaved changes indicator on form submit
-    $('form').on('submit', function() {
-        $('.unsaved-changes').remove();
-    });
-    
-    // Confirm before leaving page with unsaved changes
-    window.addEventListener('beforeunload', function(e) {
-        if ($('.unsaved-changes').length) {
+            var index = getNextLinkIndex();
+            var row = createLinkRow(index);
+            linkWrapper.append(row.hide());
+            row.fadeIn(200);
+            ensureLinksEmptyState();
+        });
+
+        linkWrapper.on('click', '.salah-seo-remove-link', function(e) {
             e.preventDefault();
-            e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
-            return e.returnValue;
-        }
-    });
-    
-    // Character counter for textareas
-    $('textarea').each(function() {
-        var textarea = $(this);
-        var maxLength = textarea.attr('maxlength');
-        
-        if (maxLength) {
-            var counter = $('<div class="char-counter" style="font-size: 12px; color: #666; margin-top: 5px;"></div>');
-            textarea.after(counter);
-            
-            function updateCounter() {
-                var remaining = maxLength - textarea.val().length;
-                counter.text(remaining + ' characters remaining');
-                
-                if (remaining < 20) {
-                    counter.css('color', '#dc3232');
-                } else if (remaining < 50) {
-                    counter.css('color', '#ffb900');
-                } else {
-                    counter.css('color', '#666');
-                }
-            }
-            
-            textarea.on('input', updateCounter);
-            updateCounter();
-        }
-    });
-    
-    // Collapsible sections
-    $('.form-table').each(function() {
-        var table = $(this);
-        var heading = table.prev('h2, h3');
-        
-        if (heading.length) {
-            heading.css('cursor', 'pointer');
-            heading.on('click', function() {
-                table.slideToggle(300);
-                
-                var icon = heading.find('.toggle-icon');
-                if (!icon.length) {
-                    heading.append('<span class="toggle-icon" style="float: right;">▼</span>');
-                    icon = heading.find('.toggle-icon');
-                }
-                
-                if (table.is(':visible')) {
-                    icon.text('▼');
-                } else {
-                    icon.text('▶');
-                }
-            });
-        }
-    });
-    
-    // Tooltips for help text
-    $('[title]').each(function() {
-        var element = $(this);
-        var title = element.attr('title');
-        
-        element.removeAttr('title');
-        
-        element.on('mouseenter', function(e) {
-            var tooltip = $('<div class="salah-seo-tooltip">' + title + '</div>');
-            tooltip.css({
-                position: 'absolute',
-                background: '#333',
-                color: '#fff',
-                padding: '8px 12px',
-                borderRadius: '4px',
-                fontSize: '12px',
-                zIndex: 9999,
-                maxWidth: '300px',
-                wordWrap: 'break-word'
-            });
-            
-            $('body').append(tooltip);
-            
-            var offset = element.offset();
-            tooltip.css({
-                top: offset.top - tooltip.outerHeight() - 10,
-                left: offset.left + (element.outerWidth() / 2) - (tooltip.outerWidth() / 2)
+            var row = $(this).closest('.salah-seo-link-row');
+            row.fadeOut(200, function() {
+                row.remove();
+                ensureLinksEmptyState();
             });
         });
-        
-        element.on('mouseleave', function() {
-            $('.salah-seo-tooltip').remove();
-        });
-    });
-    
-    // Helper functions
-    function isValidUrl(string) {
-        try {
-            var url = new URL(string);
-            return url.protocol === 'http:' || url.protocol === 'https:';
-        } catch (_) {
-            return false;
-        }
-    }
-    
-    // Initialize existing rows counter
-    linkCounter = $('.internal-link-row').length;
-    
-    // Add smooth transitions
-    $('.form-table tr').hover(
-        function() {
-            $(this).css('background-color', '#f9f9f9');
-        },
-        function() {
-            $(this).css('background-color', '');
-        }
-    );
-    
-    // Success message auto-hide
-    setTimeout(function() {
-        $('.notice.is-dismissible').fadeOut(500);
-    }, 5000);
-    
-    // Bulk Operations Handler
-    var bulkProcessing = false;
-    var bulkInterval;
-    
-    // Check if salahSeoAjax is defined, if not create fallback
-    if (typeof salahSeoAjax === 'undefined') {
-        window.salahSeoAjax = {
-            ajaxurl: ajaxurl || '/wp-admin/admin-ajax.php',
-            nonce: $('#salah_seo_bulk_nonce').val() || '',
-            strings: {
-                starting: 'بدء العملية...',
-                processing: 'جاري المعالجة...',
-                completed: 'اكتملت العملية!',
-                error: 'حدث خطأ'
+
+        // Validate before submit
+        settingsForm.on('submit', function(e) {
+            var hasErrors = false;
+            linkWrapper.find('.salah-seo-link-row').each(function() {
+                var keyword = $(this).find('.salah-seo-keyword');
+                var url = $(this).find('.salah-seo-url');
+                keyword.removeClass('ring-2 ring-red-500');
+                url.removeClass('ring-2 ring-red-500');
+
+                if (!keyword.val().trim()) {
+                    keyword.addClass('ring-2 ring-red-500');
+                    hasErrors = true;
+                }
+                if (!isValidUrl(url.val().trim())) {
+                    url.addClass('ring-2 ring-red-500');
+                    hasErrors = true;
+                }
+            });
+
+            if (hasErrors) {
+                e.preventDefault();
+            var notice = $('<div class="notice notice-error salah-seo-form-error"><p>' + window.salahSeoLabels.validationError + '</p></div>');
+            $('.salah-seo-form-error').remove();
+                $('.wrap h1').after(notice);
+                $('html, body').animate({ scrollTop: notice.offset().top - 100 }, 300);
             }
-        };
-    }
-    
-    // Check if bulk operations section exists
-    if ($('#salah-seo-bulk-start').length === 0) {
-        console.log('Bulk start button not found on this page');
-        return;
-    }
-    
-    console.log('Bulk start button found, attaching event handler');
-    
-    $('#salah-seo-bulk-start').on('click', function() {
-        console.log('Bulk start button clicked');
-        
-        if (bulkProcessing) {
-            console.log('Already processing, returning');
-            return;
+        });
+
+        // Unsaved changes indicator
+        settingsForm.find('input, textarea, select').on('change input', function() {
+            if (!$('.unsaved-changes').length) {
+                $('.wrap .submit').append('<span class="unsaved-changes text-xs text-red-500 ml-2">' + window.salahSeoLabels.unsaved + '</span>');
+            }
+        });
+
+        settingsForm.on('submit', function() {
+            $('.unsaved-changes').remove();
+        });
+
+        window.addEventListener('beforeunload', function(e) {
+            if ($('.unsaved-changes').length) {
+                e.preventDefault();
+                e.returnValue = window.salahSeoLabels.unsavedWarning;
+                return e.returnValue;
+            }
+        });
+
+        // ---------------------------
+        // Bulk optimization
+        // ---------------------------
+        if (typeof window.salahSeoAjax === 'undefined') {
+            window.salahSeoAjax = {
+                ajaxurl: ajaxurl || '/wp-admin/admin-ajax.php',
+                nonce: getNonce('#salah_seo_bulk_nonce'),
+                strings: {
+                    starting: 'بدء العملية...',
+                    processing: 'جاري المعالجة...',
+                    completed: 'اكتملت العملية!',
+                    error: 'حدث خطأ'
+                }
+            };
         }
-        
-        var startBtn = $(this);
-        var stopBtn = $('#salah-seo-bulk-stop');
-        var progressContainer = $('#salah-seo-bulk-progress');
-        var resultsContainer = $('#salah-seo-bulk-results');
-        var progressBar = $('.progress-bar');
-        var progressCurrent = $('#progress-current');
-        var progressStatus = $('#progress-status');
-        var progressTotal = $('#progress-total');
-        var progressLog = $('#progress-log');
-        
-        console.log('salahSeoAjax object:', salahSeoAjax);
-        
-        // Reset UI
-        resultsContainer.hide();
-        progressLog.empty();
-        
-        // Start bulk operation
-        console.log('Starting AJAX request to:', salahSeoAjax.ajaxurl);
-        $.ajax({
-            url: salahSeoAjax.ajaxurl,
-            type: 'POST',
-            data: {
-                action: 'salah_seo_bulk_start',
-                nonce: salahSeoAjax.nonce
-            },
-            success: function(response) {
-                console.log('AJAX success response:', response);
-                if (response.success) {
-                    console.log('Operation started successfully');
+
+        $('#salah-seo-bulk-start').on('click', function() {
+            if (bulkProcessing) {
+                return;
+            }
+
+            var startBtn = $(this);
+            var stopBtn = $('#salah-seo-bulk-stop');
+            resetBulkUi();
+
+            $.ajax({
+                url: salahSeoAjax.ajaxurl,
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'salah_seo_bulk_start',
+                    nonce: salahSeoAjax.nonce
+                },
+                beforeSend: function() {
                     bulkProcessing = true;
-                    startBtn.prop('disabled', true).html('<span class="dashicons dashicons-update-alt" style="animation: spin 1s linear infinite; margin-right: 5px;"></span>جاري المعالجة...');
-                    stopBtn.show();
-                    progressContainer.show();
-                    
-                    progressTotal.text(response.data.total);
-                    progressStatus.text('بدء المعالجة...');
-                    
-                    addLogEntry('بدء العملية: ' + response.data.message, 'info');
-                    
-                    // Start processing batches (increased interval for stability)
-                    bulkInterval = setInterval(processBatch, 3000);
-                } else {
-                    console.log('Operation failed:', response.data);
-                    alert('خطأ في بدء العملية: ' + (response.data ? response.data.message : 'خطأ غير معروف'));
+                    startBtn.prop('disabled', true).html('<span class="dashicons dashicons-update-alt animate-spin"></span>' + salahSeoAjax.strings.processing);
+                    stopBtn.removeClass('hidden');
                 }
-            },
-            error: function(xhr, status, error) {
-                console.log('AJAX error:', xhr, status, error);
-                console.log('Response text:', xhr.responseText);
-                alert('حدث خطأ في الاتصال: ' + error);
-            }
-        });
-    });
-    
-    $('#salah-seo-bulk-stop').on('click', function() {
-        if (bulkProcessing) {
-            clearInterval(bulkInterval);
-            bulkProcessing = false;
-            
-            $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance" style="margin-right: 5px;"></span>بدء التحسين الجماعي');
-            $(this).hide();
-            
-            addLogEntry('تم إيقاف العملية بواسطة المستخدم', 'warning');
-            $('#progress-status').text('تم الإيقاف');
-        }
-    });
-    
-    var retryCount = 0;
-    var maxRetries = 3;
-    
-    function processBatch() {
-        if (!bulkProcessing) return;
-        
-        $.ajax({
-            url: salahSeoAjax.ajaxurl,
-            type: 'POST',
-            timeout: 30000, // 30 seconds timeout
-            data: {
-                action: 'salah_seo_bulk_process',
-                nonce: salahSeoAjax.nonce
-            },
-            success: function(response) {
-                if (response.success) {
-                    retryCount = 0; // Reset retry count on success
-                    var data = response.data;
-                    var progress = data.progress;
-                    
-                    // Update progress bar
-                    $('.progress-bar').css('width', data.percentage + '%').text(data.percentage + '%');
-                    $('#progress-current').text(progress.processed);
-                    $('#progress-status').text('معالجة المنتج ' + progress.processed + ' من ' + progress.total);
-                    
-                    // Add batch results to log
-                    if (data.batch_results && data.batch_results.length > 0) {
-                        data.batch_results.forEach(function(result) {
-                            var statusClass = result.status === 'optimized' ? 'success' : 
-                                            result.status === 'error' ? 'error' : 'info';
-                            var logMessage = result.title + ': ' + result.message;
-                            if (result.details) {
-                                logMessage += ' (' + result.details + ')';
-                            }
-                            addLogEntry(logMessage, statusClass);
-                        });
-                    }
-                    
-                    // Check if complete
-                    if (data.is_complete) {
-                        clearInterval(bulkInterval);
-                        bulkProcessing = false;
-                        
-                        $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance" style="margin-right: 5px;"></span>بدء التحسين الجماعي');
-                        $('#salah-seo-bulk-stop').hide();
-                        $('#progress-status').text('اكتملت العملية!');
-                        
-                        // Show results summary
-                        showResultsSummary(progress);
-                        
-                        addLogEntry('اكتملت العملية بنجاح!', 'success');
-                    }
-                } else {
-                    if (retryCount < maxRetries) {
-                        retryCount++;
-                        addLogEntry('خطأ في المعالجة، إعادة المحاولة ' + retryCount + '/' + maxRetries, 'warning');
-                        setTimeout(processBatch, 5000); // Retry after 5 seconds
-                    } else {
-                        clearInterval(bulkInterval);
-                        bulkProcessing = false;
-                        addLogEntry('خطأ: ' + response.data.message, 'error');
-                        $('#progress-status').text('حدث خطأ');
-                        $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance" style="margin-right: 5px;"></span>بدء التحسين الجماعي');
-                        $('#salah-seo-bulk-stop').hide();
-                    }
-                }
-            },
-            error: function(xhr, status, error) {
-                console.log('AJAX error in processBatch:', xhr, status, error);
-                
-                if (retryCount < maxRetries) {
-                    retryCount++;
-                    addLogEntry('خطأ في الاتصال، إعادة المحاولة ' + retryCount + '/' + maxRetries + ' (' + error + ')', 'warning');
-                    setTimeout(processBatch, 5000); // Retry after 5 seconds
-                } else {
-                    clearInterval(bulkInterval);
+            }).done(function(response) {
+                if (!response || !response.success) {
                     bulkProcessing = false;
-                    addLogEntry('خطأ في الاتصال: ' + error, 'error');
-                    $('#progress-status').text('خطأ في الاتصال');
-                    $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance" style="margin-right: 5px;"></span>بدء التحسين الجماعي');
-                    $('#salah-seo-bulk-stop').hide();
+                    startBtn.prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                    stopBtn.addClass('hidden');
+                    alert(response && response.data ? response.data.message : salahSeoAjax.strings.error);
+                    return;
                 }
-            }
+
+                $('#progress-total').text(response.data.total);
+                $('#progress-status').text(salahSeoAjax.strings.processing);
+                addLogEntry($('#progress-log'), response.data.message, 'info');
+
+                currentBulkInterval = setInterval(function() {
+                    processBulkBatch(startBtn, stopBtn);
+                }, 3000);
+            }).fail(function() {
+                bulkProcessing = false;
+                startBtn.prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                stopBtn.addClass('hidden');
+                alert(salahSeoAjax.strings.error);
+            });
         });
-    }
-    
-    function addLogEntry(message, type) {
-        var logContainer = $('#progress-log');
-        var timestamp = new Date().toLocaleTimeString('ar');
-        var colorClass = type === 'success' ? 'color: #46b450' : 
-                        type === 'error' ? 'color: #dc3232' : 
-                        type === 'warning' ? 'color: #ffb900' : 'color: #666';
-        
-        var logEntry = $('<div style="margin-bottom: 5px; padding: 5px; border-bottom: 1px solid #eee; font-size: 12px;">' +
-            '<span style="color: #999;">[' + timestamp + ']</span> ' +
-            '<span style="' + colorClass + ';">' + message + '</span>' +
-            '</div>');
-        
-        logContainer.append(logEntry);
-        logContainer.scrollTop(logContainer[0].scrollHeight);
-    }
-    
-    function showResultsSummary(progress) {
-        var resultsContainer = $('#salah-seo-bulk-results');
-        var summaryContainer = $('#results-summary');
-        
-        var summaryHtml = '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; text-align: center;">' +
-            '<div><strong style="display: block; font-size: 18px; color: #0073aa;">' + progress.total + '</strong><span>إجمالي المنتجات</span></div>' +
-            '<div><strong style="display: block; font-size: 18px; color: #46b450;">' + progress.optimized + '</strong><span>تم تحسينها</span></div>' +
-            '<div><strong style="display: block; font-size: 18px; color: #666;">' + progress.skipped + '</strong><span>تم تجاهلها</span></div>' +
-            '<div><strong style="display: block; font-size: 18px; color: #dc3232;">' + progress.errors + '</strong><span>أخطاء</span></div>' +
-            '</div>';
-        
-        if (progress.optimized > 0) {
-            summaryHtml += '<div style="margin-top: 15px; padding: 10px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; color: #155724;">' +
-                '<strong>تم بنجاح!</strong> تم تحسين ' + progress.optimized + ' منتج من أصل ' + progress.total + ' منتج.' +
-                '</div>';
+
+        $('#salah-seo-bulk-stop').on('click', function() {
+            if (!bulkProcessing) {
+                return;
+            }
+            clearInterval(currentBulkInterval);
+            bulkProcessing = false;
+            $('#salah-seo-bulk-start').prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+            $(this).addClass('hidden');
+            addLogEntry($('#progress-log'), window.salahSeoLabels.stoppedByUser, 'warning');
+            $('#progress-status').text(window.salahSeoLabels.stoppedByUser);
+        });
+
+        function processBulkBatch(startBtn, stopBtn) {
+            if (!bulkProcessing) {
+                clearInterval(currentBulkInterval);
+                return;
+            }
+
+            $.ajax({
+                url: salahSeoAjax.ajaxurl,
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'salah_seo_bulk_process',
+                    nonce: salahSeoAjax.nonce
+                }
+            }).done(function(response) {
+                if (!response || !response.success) {
+                    addLogEntry($('#progress-log'), response && response.data ? response.data.message : salahSeoAjax.strings.error, 'error');
+                    return;
+                }
+
+                var data = response.data;
+                var percentage = data.percentage;
+                $('.progress-bar').css('width', percentage + '%').text(percentage + '%');
+                $('#progress-current').text(data.progress.processed);
+                $('#progress-status').text(window.salahSeoLabels.processingProduct.replace('%1$s', data.progress.processed).replace('%2$s', data.progress.total));
+
+                if (data.batch_results) {
+                    data.batch_results.forEach(function(result) {
+                        addLogEntry($('#progress-log'), result.title + ': ' + result.message, result.status === 'optimized' ? 'success' : result.status === 'error' ? 'error' : 'info');
+                    });
+                }
+
+                if (data.is_complete) {
+                    clearInterval(currentBulkInterval);
+                    bulkProcessing = false;
+                    startBtn.prop('disabled', false).html('<span class="dashicons dashicons-performance"></span>' + window.salahSeoLabels.bulkStart);
+                    stopBtn.addClass('hidden');
+                    $('#progress-status').text(salahSeoAjax.strings.completed);
+                    showBulkResults(data.progress);
+                    addLogEntry($('#progress-log'), salahSeoAjax.strings.completed, 'success');
+                }
+            }).fail(function(_, __, error) {
+                addLogEntry($('#progress-log'), error || salahSeoAjax.strings.error, 'error');
+            });
         }
-        
-        summaryContainer.html(summaryHtml);
-        resultsContainer.show();
-    }
-});
+
+        // ---------------------------
+        // Internal links automation
+        // ---------------------------
+        function startLinksOperation(action) {
+            if (linkProcessing) {
+                return;
+            }
+
+            var confirmRemove = action === 'remove' ? window.confirm(window.salahSeoLabels.confirmRemove) : true;
+            if (!confirmRemove) {
+                return;
+            }
+
+            processedLinks = 0;
+            linkProcessing = true;
+            toggleButtonsDuringLinks(true);
+            $('#links-log').empty();
+            $('#links-status').text(salahSeoAjax.linksStrings.preparing);
+            $('#salah-seo-links-progress').removeClass('hidden');
+            updateLinksProgress(0);
+
+            $.ajax({
+                url: salahSeoAjax.ajaxurl,
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'salah_seo_links_prepare',
+                    nonce: getNonce('#salah_seo_links_nonce', salahSeoAjax.linksNonce),
+                    link_action: action
+                }
+            }).done(function(response) {
+                if (!response || !response.success) {
+                    linkProcessing = false;
+                    toggleButtonsDuringLinks(false);
+                    alert(response && response.data ? response.data.message : salahSeoAjax.strings.error);
+                    return;
+                }
+
+                var total = response.data.total_items || 0;
+                updateLinksProgress(total);
+
+                if (total === 0) {
+                    linkProcessing = false;
+                    toggleButtonsDuringLinks(false);
+                    $('#links-status').text(window.salahSeoLabels.noItems);
+                    return;
+                }
+
+                $('#links-status').text(action === 'apply' ? salahSeoAjax.linksStrings.applying : salahSeoAjax.linksStrings.removing);
+                processLinksBatch(action, total);
+            }).fail(function() {
+                linkProcessing = false;
+                toggleButtonsDuringLinks(false);
+                alert(salahSeoAjax.strings.error);
+            });
+        }
+
+        function processLinksBatch(action, total) {
+            $.ajax({
+                url: salahSeoAjax.ajaxurl,
+                type: 'POST',
+                dataType: 'json',
+                data: {
+                    action: 'salah_seo_links_process',
+                    nonce: getNonce('#salah_seo_links_nonce', salahSeoAjax.linksNonce),
+                    process_action: action
+                }
+            }).done(function(response) {
+                if (!response || !response.success) {
+                    addLogEntry($('#links-log'), response && response.data ? response.data.message : salahSeoAjax.strings.error, 'error');
+                    linkProcessing = false;
+                    toggleButtonsDuringLinks(false);
+                    return;
+                }
+
+                var data = response.data;
+                var increment = data.batch_total || data.processed_count || 0;
+                processedLinks += increment;
+                updateLinksProgress(total);
+
+                if (data.message) {
+                    data.message.split('\n').forEach(function(line) {
+                        if (line.trim().length) {
+                            addLogEntry($('#links-log'), line, 'info');
+                        }
+                    });
+                }
+
+                if (data.done) {
+                    $('#links-status').text(salahSeoAjax.linksStrings.completed);
+                    linkProcessing = false;
+                    toggleButtonsDuringLinks(false);
+                    return;
+                }
+
+                $('#links-status').text(action === 'apply' ? salahSeoAjax.linksStrings.applying : salahSeoAjax.linksStrings.removing);
+                processLinksBatch(action, total);
+            }).fail(function() {
+                addLogEntry($('#links-log'), salahSeoAjax.strings.error, 'error');
+                linkProcessing = false;
+                toggleButtonsDuringLinks(false);
+            });
+        }
+
+        $('#salah-seo-links-apply').on('click', function() {
+            startLinksOperation('apply');
+        });
+
+        $('#salah-seo-links-remove').on('click', function() {
+            startLinksOperation('remove');
+        });
+
+        // Auto-hide dismissible notices
+        setTimeout(function() {
+            $('.notice.is-dismissible').fadeOut(400);
+        }, 5000);
+    });
+})(jQuery);
