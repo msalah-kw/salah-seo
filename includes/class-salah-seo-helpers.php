@@ -238,17 +238,169 @@ class Salah_SEO_Helpers {
             'default_meta_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_short_description' => 'متجر نيكوتين هو مصدرك الموثوق لمنتجات الفيب بالكويت حيث نوفر توصيل مجاني خلال ساعة واحدة',
             'default_full_description' => 'أفضل منتجات الفيب وأكياس النيكوتين في الكويت. نوفر لك تشكيلة واسعة من أجهزة الفيب، بودات، نكهات، وأظرف نيكوتين أصلية 100%. تمتع بتجربة تدخين الكتروني آمنة، سهلة الاستخدام، وبأسعار تنافسية مع خدمة توصيل سريعة ومجانية داخل الكويت. منتجاتنا تناسب المبتدئين والمحترفين، وتشمل أشهر العلامات التجارية في مجال الفيب. اختر الآن البديل العصري للتدخين التقليدي واستمتع بجودة عالية وتجربة مختلفة.',
-            'internal_links' => array(
-                'أكياس النيكوتين' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/',
-                'نيكوتين' => 'https://nicotinekw.com/natural-nicotine-in-the-body/',
-                'فيب' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/',
-                'نكهات' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/',
-                'الكويت' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/'
+            'internal_link_rules' => array(
+                array('keyword' => 'أكياس النيكوتين', 'url' => 'https://nicotinekw.com/product-category/أكياس-النيكوتين/', 'repeats' => 1),
+                array('keyword' => 'نيكوتين', 'url' => 'https://nicotinekw.com/natural-nicotine-in-the-body/', 'repeats' => 1),
+                array('keyword' => 'فيب', 'url' => 'https://nicotinekw.com/الفرق-بين-سحبة-الزقارة-والفيب/', 'repeats' => 1),
+                array('keyword' => 'نكهات', 'url' => 'https://nicotinekw.com/مكونات-نكهة-الفيب/', 'repeats' => 1),
+                array('keyword' => 'الكويت', 'url' => 'https://nicotinekw.com/فيب-الكويت-دليلك-الشامل-لأفضل-المنتجات/', 'repeats' => 1)
             )
         );
-        
+
         $settings = get_option('salah_seo_settings', array());
-        
-        return wp_parse_args($settings, $defaults);
+        $settings = wp_parse_args($settings, $defaults);
+
+        // Backward compatibility: convert legacy associative links to structured rules
+        if (!empty($settings['internal_links']) && empty($settings['internal_link_rules'])) {
+            $settings['internal_link_rules'] = self::format_internal_link_rules($settings['internal_links']);
+        }
+
+        return $settings;
+    }
+
+    /**
+     * Normalize internal link rules from multiple formats
+     *
+     * @param array $raw_rules Raw rules array
+     * @return array
+     */
+    public static function format_internal_link_rules($raw_rules) {
+        $rules = array();
+
+        if (empty($raw_rules) || !is_array($raw_rules)) {
+            return $rules;
+        }
+
+        // If associative array keyword => url
+        if (array_keys($raw_rules) !== range(0, count($raw_rules) - 1)) {
+            foreach ($raw_rules as $keyword => $url) {
+                $valid_url = self::validate_url($url);
+                $keyword = sanitize_text_field($keyword);
+                if ($keyword && $valid_url) {
+                    $rules[] = array(
+                        'keyword' => $keyword,
+                        'url' => $valid_url,
+                        'repeats' => 1,
+                    );
+                }
+            }
+            return $rules;
+        }
+
+        foreach ($raw_rules as $rule) {
+            if (!is_array($rule)) {
+                continue;
+            }
+
+            $keyword = isset($rule['keyword']) ? sanitize_text_field($rule['keyword']) : '';
+            $url = isset($rule['url']) ? self::validate_url($rule['url']) : false;
+            $repeats = isset($rule['repeats']) ? max(1, intval($rule['repeats'])) : 1;
+
+            if ($keyword && $url) {
+                $rules[] = array(
+                    'keyword' => $keyword,
+                    'url' => $url,
+                    'repeats' => $repeats,
+                );
+            }
+        }
+
+        return $rules;
+    }
+
+    /**
+     * Apply internal link rules to HTML content.
+     *
+     * @param string $content Original content.
+     * @param array  $rules   Normalized rules array.
+     * @return string Updated content.
+     */
+    public static function apply_internal_links_to_content($content, $rules) {
+        if (empty($content) || empty($rules)) {
+            return $content;
+        }
+
+        $dom = new DOMDocument();
+        @$dom->loadHTML('<?xml encoding="utf-8" ?>' . $content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+
+        $xpath = new DOMXPath($dom);
+        $used_urls = array();
+
+        foreach ($rules as $rule) {
+            $keyword = $rule['keyword'];
+            $url = $rule['url'];
+            $max_repeats = isset($rule['repeats']) ? max(1, intval($rule['repeats'])) : 1;
+            $count = 0;
+
+            if (in_array($url, $used_urls, true)) {
+                continue;
+            }
+
+            // Enforce a single link per target URL regardless of keyword matches.
+            $max_repeats = 1;
+
+            $nodes = $xpath->query("//text()[not(ancestor::a) and not(ancestor::script) and not(ancestor::style) and not(ancestor::code) and normalize-space() != '']");
+
+            foreach ($nodes as $node) {
+                if ($count >= $max_repeats) {
+                    break;
+                }
+
+                if (stripos($node->nodeValue, $keyword) === false) {
+                    continue;
+                }
+
+                $fragment = $dom->createDocumentFragment();
+                $parts = preg_split('/(' . preg_quote($keyword, '/') . ')/iu', $node->nodeValue, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+                foreach ($parts as $index => $part) {
+                    $is_keyword = ($index % 2 === 1) && $count < $max_repeats;
+
+                    if ($is_keyword) {
+                        $link = $dom->createElement('a', $part);
+                        $link->setAttribute('href', $url);
+                        $link->setAttribute('target', '_self');
+                        $link->setAttribute('rel', 'noopener');
+                        $fragment->appendChild($link);
+                        $count++;
+                    } else {
+                        $fragment->appendChild($dom->createTextNode($part));
+                    }
+                }
+
+                if ($node->parentNode) {
+                    $node->parentNode->replaceChild($fragment, $node);
+                }
+
+                if ($count >= $max_repeats) {
+                    break;
+                }
+            }
+
+            if ($count > 0) {
+                $used_urls[] = $url;
+            }
+        }
+
+        $new_html = $dom->saveHTML();
+
+        return preg_replace('~<(?:!DOCTYPE|/?(?:html|body))[^>]*>\s*~i', '', $new_html);
+    }
+
+    /**
+     * Remove internal links that point to the current site from content.
+     *
+     * @param string $content Original content.
+     * @return string Updated content without internal links.
+     */
+    public static function remove_internal_links_from_content($content) {
+        if (empty($content)) {
+            return $content;
+        }
+
+        $site_url = preg_quote(home_url(), '/');
+        $pattern = '/<a\s+(?:[^>]*?\s+)?href=["\'](' . $site_url . '[^"\']*)["\'][^>]*?>(.*?)<\/a>/is';
+
+        return preg_replace($pattern, '$2', $content);
     }
 }

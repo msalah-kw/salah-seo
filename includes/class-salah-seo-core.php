@@ -111,12 +111,12 @@ class Salah_SEO_Core {
         if ($this->populate_full_description($post_id)) {
             $optimizations_applied = true;
             $applied_optimizations[] = 'الوصف الكامل (Full Description)';
-            
-            // Apply internal linking after description is set
-            if ($this->is_feature_enabled('enable_internal_linking')) {
-                if ($this->apply_internal_linking($post_id)) {
-                    $applied_optimizations[] = 'الربط الداخلي (Internal Linking)';
-                }
+        }
+
+        if ($this->is_feature_enabled('enable_internal_linking')) {
+            if ($this->apply_internal_linking($post_id)) {
+                $optimizations_applied = true;
+                $applied_optimizations[] = 'الربط الداخلي (Internal Linking)';
             }
         }
         
@@ -135,9 +135,9 @@ class Salah_SEO_Core {
      */
     private function populate_focus_keyword($post_id) {
         $current_keyword = get_post_meta($post_id, 'rank_math_focus_keyword', true);
-        
-        // Only populate if empty
-        if (empty($current_keyword)) {
+
+        // Only populate if empty or contains placeholder content
+        if (empty($current_keyword) || $this->is_placeholder_value($current_keyword)) {
             $product_title = get_the_title($post_id);
             if (!empty($product_title)) {
                 update_post_meta($post_id, 'rank_math_focus_keyword', $product_title);
@@ -213,11 +213,20 @@ class Salah_SEO_Core {
      */
     private function populate_product_tags($post_id) {
         $current_tags = wp_get_post_terms($post_id, 'product_tag', array('fields' => 'names'));
-        
-        // Only populate if no tags exist
-        if (empty($current_tags) || is_wp_error($current_tags)) {
+
+        if (is_wp_error($current_tags)) {
+            return false;
+        }
+
+        // Remove placeholder tags like "Auto Draft"
+        $current_tags = array_filter(array_map('trim', $current_tags), function($tag) {
+            return !empty($tag) && !$this->is_placeholder_value($tag);
+        });
+
+        // Only populate if no real tags exist
+        if (empty($current_tags)) {
             $tags_to_add = array();
-            
+
             // Add product name as tag
             $product_title = get_the_title($post_id);
             if (!empty($product_title)) {
@@ -307,27 +316,19 @@ class Salah_SEO_Core {
             return false;
         }
         
-        $internal_links = $this->get_setting('internal_links');
-        if (empty($internal_links) || !is_array($internal_links)) {
+        $internal_link_rules = $this->get_setting('internal_link_rules');
+        if (empty($internal_link_rules)) {
             return false;
         }
-        
-        $updated_content = $content;
-        
-        foreach ($internal_links as $keyword => $url) {
-            if (empty($keyword) || empty($url)) {
-                continue;
-            }
-            
-            // Create the link HTML
-            $link_html = '<a href="' . esc_url($url) . '">' . esc_html($keyword) . '</a>';
-            
-            // Replace first occurrence only using preg_replace with limit
-            $pattern = '/\b' . preg_quote($keyword, '/') . '\b/u';
-            $updated_content = preg_replace($pattern, $link_html, $updated_content, 1);
+
+        $normalized_rules = Salah_SEO_Helpers::format_internal_link_rules($internal_link_rules);
+
+        if (empty($normalized_rules)) {
+            return false;
         }
-        
-        // Update content if it was modified
+
+        $updated_content = Salah_SEO_Helpers::apply_internal_links_to_content($content, $normalized_rules);
+
         if ($updated_content !== $content) {
             wp_update_post(array(
                 'ID' => $post_id,
@@ -364,6 +365,28 @@ class Salah_SEO_Core {
      * Get a setting value
      */
     private function get_setting($key) {
+        if ('internal_link_rules' === $key) {
+            $rules = isset($this->settings[$key]) ? $this->settings[$key] : array();
+
+            return Salah_SEO_Helpers::format_internal_link_rules($rules);
+        }
+
         return isset($this->settings[$key]) ? $this->settings[$key] : '';
+    }
+
+    /**
+     * Determine if a value is an auto-generated placeholder created during draft creation.
+     *
+     * @param string $value Value to inspect.
+     * @return bool
+     */
+    private function is_placeholder_value($value) {
+        if (!is_string($value)) {
+            return false;
+        }
+
+        $normalized = strtolower(trim($value));
+
+        return in_array($normalized, array('auto-draft', 'auto draft'), true);
     }
 }
